@@ -1,17 +1,17 @@
 import numpy as np
 
-def dfdx_wJ2J3(r_vec, v_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
+def dfdx_wJ2J3(r_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
     
     x, y, z = r_vec
     r2 = np.dot(r_vec, r_vec)
     r = np.sqrt(r2)
     r3, r5, r7, r9, r11 = r**3, r**5, r**7, r**9, r**11
     
-    # --- 2. Build the 3x3 Gravity Gradient (G = del_a / del_r) ---
+    # Build 3x3 Gravity Gradient
     # Point Mass
     G = -(mu/r3) * np.eye(3) + (3*mu/r5) * np.outer(r_vec, r_vec)
     
-    # J2 Contribution
+    # J2 Contribution if enabled
     if use_J2:
         j2_c = -1.5 * mu * J2 * Re**2
         G_j2 = np.array([
@@ -31,18 +31,14 @@ def dfdx_wJ2J3(r_vec, v_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
         ])
         G += j3_c * G_j3
 
-# --- 3. Build the 3x3 Sensitivity Matrix (S = del_a / del_params) ---
-    
-    # Use the same constants as the G-block to ensure sign consistency
-    # (Note: mu is already included in these j_c constants)
+# Build the 3x3 Sensitivity Matrix (S = del_a / del_params)   
     j2_c = -1.5 * mu * J2 * Re**2
     j3_c = -2.5 * mu * J3 * Re**3
 
-    # Acceleration - Point Mass
+    # Point Mass Acceleration 
     a_pm = -(mu / r3) * r_vec
     
-    # Acceleration - J2 (Matches G_j2 bracket logic)
-    # Target JSON uses: x*(1 - 5z^2/r^2)
+    # J2 Acceleration
     vec_j2 = np.array([
         x * (1/r5 - 5*z**2/r7),
         y * (1/r5 - 5*z**2/r7),
@@ -50,8 +46,7 @@ def dfdx_wJ2J3(r_vec, v_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
     ])
     a_j2 = j2_c * vec_j2
     
-    # Acceleration - J3 (Matches G_j3 bracket logic)
-    # Target JSON uses: x*(3z - 7z^3/r^2)
+    # J3 Acceleration
     vec_j3 = np.array([
         x * (3*z/r7 - 7*z**3/r9),
         y * (3*z/r7 - 7*z**3/r9),
@@ -59,31 +54,27 @@ def dfdx_wJ2J3(r_vec, v_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
     ])
     a_j3 = j3_c * vec_j3
 
-    # --- Assemble S Matrix ---
+    # Assemble S Matrix
     S = np.zeros((3, 3))
     
-    # Column 6: Partial wrt mu (Total Accel / mu)
-    # This now includes pm, j2, AND j3 correctly
+    # Partial wrt mu (Total Accel / mu)
     S[:, 0] = (a_pm + a_j2 + a_j3) / mu
     
-    # Column 7: Partial wrt J2
+    # Partial wrt J2
     S[:, 1] = a_j2 / J2
     
-    # Column 8: Partial wrt J3
+    # Partial wrt J3
     S[:, 2] = a_j3 / J3
-    
-    # REMOVED: S[2,2] *= -1 and S[2,0] *= -1
-    # The signs are now handled natively by the j2_c and j3_c definitions
 
-    # --- 4. Assemble the Full 9x9 A-Matrix ---
+    # Assemble the Full 9x9 A-Matrix 
     A = np.zeros((9, 9))
-    A[0:3, 3:6] = np.eye(3) # dr/dv block
+    A[0:3, 3:6] = np.eye(3) # dr/dv block (zeros)
     A[3:6, 0:3] = G        # dv/dr block (Gravity Gradient)
     A[3:6, 6:9] = S        # dv/dp block (Sensitivity)
     
     return A
 
-# --- TEST CASE USING JSON VALUES ---
+# Test Case
 state_json = np.array([
     -0.64901376519124, 1.18116604196553, -0.75845329728369, # r
     -1.10961303850152, -0.84555124000780, -0.57266486645795, # v
@@ -122,6 +113,12 @@ print("\nSensitivity (S) Block:\n", S_block)
 
 # Compute error values and display max error
 error_matrix = A_matrix - np.array(target_vals)
+
+# Gravity Gradient Error matrix
+print("\nGravity Gradient Error:", error_matrix[3:6, 0:3])
+
+# Sensitivity Error matrix
+print("\nSensitivity Error:", error_matrix[3:6, 6:9])
+
 max_error = np.max(np.abs(error_matrix))
 print("\nMax Error:", max_error)
-
