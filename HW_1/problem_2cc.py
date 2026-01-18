@@ -1,14 +1,13 @@
 import os, sys
 import numpy as np
 from scipy.integrate import solve_ivp
-
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
 
-# Assuming these are imported or defined as follows to match assignment requirements:
-MU_EARTH = 3.986004415E5  # Standard Earth gravitational parameter
-R_EARTH = 6378.0    # Standard Earth radius
+
+# Constants
+MU_EARTH = 3.986004415E5 
+R_EARTH = 6378.0    
 
 def dfdx_wJ2J3(r_vec, mu, J2_val, J3_val, Re, use_J2=True, use_J3=True):
     """
@@ -84,7 +83,8 @@ def keplerJ2_wPhi_ODE(t, state_flat, mu, re, use_J2=True, use_J3=False):
     
     return np.concatenate([x_dot, Phi_dot.flatten()])
 
-# 1. Setup Initial Conditions
+
+# Setup Initial Conditions
 r_init, v_init = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 period = 2 * np.pi * np.sqrt(10000**3 / MU_EARTH)
 t_span = (0, 15 * period)
@@ -93,7 +93,7 @@ t_eval = np.arange(0, t_span[1], 10.0)
 state_flat = np.concatenate([r_init, v_init, [0.0010826269], np.eye(7).flatten()])  # Initial J2 value and STM
 
 # Solve and save full state over the time span
-sol = solve_ivp(keplerJ2_wPhi_ODE, t_span, state_flat, t_eval=t_eval, args=(MU_EARTH, R_EARTH, True, False))
+sol = solve_ivp(keplerJ2_wPhi_ODE, t_span, state_flat, t_eval=t_eval, args=(MU_EARTH, R_EARTH, True, False), rtol=1e-10, atol=1e-10, method='DOP853')
 
 # Extract all state estimates and STMs at each time step
 states = sol.y[0:7, :].T  # Shape (N, 7)
@@ -106,6 +106,29 @@ disturbances = np.zeros_like(states)  # Shape (N, 7)
 for i in range(states.shape[0]):
     disturbances[i, :] = stms[i, :, :] @ init_del
 
+# Save results to csv file
+output_path = os.path.join(os.path.dirname(__file__), 'problem_2cc_disturbances.csv')
+
+# 1. Slice 'disturbances' to remove the J2 column (index 6)
+# disturbances is (N, 7), we want all rows and the first 6 columns -> [:, 0:6]
+disturbances_no_j2 = disturbances[:, 0:6]
+
+# 2. Combine time and data
+# No need to transpose (.T) here because disturbances_no_j2 is already (N, 6)
+data_to_save = np.column_stack((sol.t, disturbances_no_j2))
+
+# 3. Adjust formats (1 for time + 6 for the state = 7 total)
+formats = ['%.4f'] + ['%.10e'] * 6 
+
+# 4. Save to CSV
+np.savetxt(output_path, 
+           data_to_save, 
+           delimiter=',', 
+           header='Time(s),Delta_X(km),Delta_Y(km),Delta_Z(km),Delta_VX(km/s),Delta_VY(km/s),Delta_VZ(km/s)', 
+           fmt=formats,
+           comments='')
+
+print(f"File saved to: {output_path}")
 
 # Plot disturbances over time
 import matplotlib.pyplot as plt

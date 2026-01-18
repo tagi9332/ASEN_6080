@@ -1,9 +1,8 @@
-import os
 import numpy as np
 
-# Assuming these are imported or defined as follows to match assignment requirements:
-MU_EARTH = 3.986004415E5  # Standard Earth gravitational parameter
-R_EARTH = 6378.0    # Standard Earth radius
+# Constants
+MU_EARTH = 3.986004415E5 
+R_EARTH = 6378.0    
 
 def dfdx_wJ2J3(r_vec, mu, J2_val, J3_val, Re, use_J2=True, use_J3=True):
     """

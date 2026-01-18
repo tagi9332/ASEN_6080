@@ -145,3 +145,46 @@ sol_pert = solve_ivp(eom_with_stm, t_span, y0_pert, t_eval=t_eval,
 # Indexing [:6, :] gets X, Y, Z, VX, VY, VZ for all time steps
 diff = sol_pert.y[:6, :] - sol_ref.y[:6, :]
 
+# Save differences to csv for analysis
+output_path = os.path.join(os.path.dirname(__file__), 'problem_2c_differences.csv')
+
+# Combine time and data
+data_to_save = np.column_stack((sol_ref.t, diff.T))
+
+# fmt argument: 
+# '%.4f' makes the first column (Time) a decimal with 4 places
+# '%.10e' keeps the rest in high-precision scientific notation (standard for small orbital errors)
+formats = ['%.4f'] + ['%.10e'] * 6 
+
+np.savetxt(output_path, 
+           data_to_save, 
+           delimiter=',', 
+           header='Time(s),Delta_X(km),Delta_Y(km),Delta_Z(km),Delta_VX(km/s),Delta_VY(km/s),Delta_VZ(km/s)', 
+           fmt=formats,
+           comments='')
+
+print(f"File saved to: {output_path}")
+
+
+# 3. Plot Results
+fig, axs = plt.subplots(2, 1, figsize=(10, 8))
+time_hours = sol_ref.t / 3600.0
+axs[0].plot(time_hours, diff[0, :], label='ΔX (km)')
+axs[0].plot(time_hours, diff[1, :], label='ΔY (km)')
+axs[0].plot(time_hours, diff[2, :], label='ΔZ (km)')
+axs[0].set_title('Position Differences Over Time')
+axs[0].set_xlabel('Time (hours)')
+axs[0].set_ylabel('Position Difference (km)')
+axs[0].legend()
+axs[0].grid()
+axs[1].plot(time_hours, diff[3, :]*1000, label='ΔVX (m/s)')
+axs[1].plot(time_hours, diff[4, :]*1000, label='ΔVY (m/s)')
+axs[1].plot(time_hours, diff[5, :]*1000, label='ΔVZ (m/s)')
+axs[1].set_title('Velocity Differences Over Time')
+axs[1].set_xlabel('Time (hours)')
+axs[1].set_ylabel('Velocity Difference (m/s)')
+axs[1].legend()
+axs[1].grid()
+plt.tight_layout()
+plt.show()
+
