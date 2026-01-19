@@ -1,148 +1,21 @@
 import numpy as np
-import warnings
-from utils.frame_conversions.rel_to_inertial_functions import rel_vector_to_inertial
-from resources.constants import MU_EARTH
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
 
-def inertial_to_oes(R, V, mu=MU_EARTH, units='rad'):
-    """
-    Convert inertial state vectors (R, V) to classical orbital elements.
-    Returns: a, e, i, RAAN, ARGP, TA
-    """
-
-    warnings.filterwarnings("error", category=RuntimeWarning)
-
-    R = np.array(R, dtype=float)
-    V = np.array(V, dtype=float)
-    r_norm = np.linalg.norm(R)
-    v_norm = np.linalg.norm(V)
-
-    # Angular momentum vector
-    H = np.cross(R, V)
-    h = np.linalg.norm(H)
-
-    # Line of nodes
-    N = np.cross([0, 0, 1], H)
-    n_norm = np.linalg.norm(N)
-
-    # Eccentricity vector
-    e_vec = (1/mu) * ((v_norm**2 - mu / r_norm) * R - np.dot(R, V) * V)
-    ecc = np.linalg.norm(e_vec)
-
-    # ----------------------
-    #  CIRCULAR ORBIT CHECK
-    # ----------------------
-    tol = 1e-8
-    if ecc < tol:
-        # Inclination
-        cos_i = H[2] / h
-        cos_i = np.clip(cos_i, -1, 1)
-        i = np.arccos(cos_i)
-
-        # RAAN
-        if n_norm < tol:  # equatorial circular
-            raan = 0.0
-        else:
-            Nhat = N / n_norm
-            cos_raan = np.clip(Nhat[0], -1, 1)
-            raan = np.arccos(cos_raan)
-            if Nhat[1] < 0:
-                raan = 2*np.pi - raan
-
-        # Argument of periapsis undefined → 0 by convention
-        argp = 0.0
-
-        # True anomaly depends on equatorial/inclined
-        if n_norm > tol:
-            cos_ta = np.dot(N, R) / (n_norm * r_norm)
-            cos_ta = np.clip(cos_ta, -1, 1)
-            ta = np.arccos(cos_ta)
-            if R[2] < 0:
-                ta = 2*np.pi - ta
-        else:
-            # Equatorial circular: atan2 in inertial plane
-            ta = np.arctan2(R[1], R[0]) % (2*np.pi)
-
-        # Semi-major axis
-        a = 1.0 / ((2.0 / r_norm) - (v_norm**2 / mu))
-
-        # Units
-        if units == 'deg':
-            return a, ecc, np.degrees(i), np.degrees(raan), np.degrees(argp), np.degrees(ta)
-        else:
-            return a, ecc, i, raan, argp, ta
-
-    # ------------------------------
-    # NONCIRCULAR ORBIT (ecc ≥ tol)
-    # ------------------------------
-
-    # Inclination
-    cos_i = H[2] / h
-    cos_i = np.clip(cos_i, -1, 1)
-    i = np.arccos(cos_i)
-
-    # RAAN
-    if n_norm < tol:
-        raan = 0.0
-        Nhat = np.array([1,0,0])
-    else:
-        Nhat = N / n_norm
-        cos_raan = np.clip(Nhat[0], -1, 1)
-        raan = np.arccos(cos_raan)
-        if Nhat[1] < 0:
-            raan = 2*np.pi - raan
-
-    # Argument of periapsis
-    cos_argp = np.dot(Nhat, e_vec) / ecc
-    cos_argp = np.clip(cos_argp, -1, 1)
-    argp = np.arccos(cos_argp)
-    if e_vec[2] < 0:
-        argp = 2*np.pi - argp
-
-    # True anomaly
-    cos_ta = np.dot(e_vec, R) / (ecc * r_norm)
-    cos_ta = np.clip(cos_ta, -1, 1)
-    ta = np.arccos(cos_ta)
-    if np.dot(R, V) < 0:
-        ta = 2*np.pi - ta
-
-    # Semi-major axis
-    a = 1 / ((2/r_norm) - (v_norm**2/mu))
-
-    if units == 'deg':
-        return a, ecc, np.degrees(i), np.degrees(raan), np.degrees(argp), np.degrees(ta)
-    else:
-        return a, ecc, i, raan, argp, ta
-
-
-def orbital_elements_to_inertial(a, e, i, raan, argp, ta, mu=MU_EARTH, units='rad'):
+# --- 1. Your Custom OE to Inertial Function ---
+def orbital_elements_to_inertial(a, e, i, raan, argp, ta, mu=398600.4415, units='rad'):
     """
     Classical Orbital Elements -> inertial position/velocity.
-
-    Inputs:
-        a     : semi-major axis [km] (a<0 allowed for hyperbolic)
-        e     : eccentricity (scalar,e!=1)
-        i     : inclination [deg]
-        RAAN  : right ascension of ascending node Ω [deg]
-        AOP  : argument of perigee ω [deg]
-        TA    : true anomaly f [deg]
-        mu    : gravitational parameter [km^3/s^2]
-        units : 'rad' for radians, 'deg' for degrees
-
-    Returns:
-        r : position vector in inertial frame [km]
-        v : velocity vector in inertial frame [km/s]
     """
-
-    # Convert angles from degrees to radians if units is 'deg'
     if units == 'deg':
         i = np.radians(i)
         raan = np.radians(raan)
         argp = np.radians(argp)
         ta = np.radians(ta)
 
-    # semi-latus rectum (works for elliptical & hyperbolic; not defined for parabolic e=1)
     if np.isclose(e, 1.0, atol=1e-12):
         raise ValueError("Parabolic case (e close to 1) not supported.")
+    
     p = a * (1.0 - e**2)
 
     cnu, snu = np.cos(ta), np.sin(ta)
@@ -164,145 +37,111 @@ def orbital_elements_to_inertial(a, e, i, raan, argp, ta, mu=MU_EARTH, units='ra
     v = Q_pqw_to_ijk @ v_pf
     return r, v
 
-# compute mean motion from inertial state vectors
-def compute_mean_motion_from_ECI(r, v, mu=398600.4418):
-    """
-    Compute the mean motion from inertial state vectors (r, v).
-    r: position vector (km)
-    v: velocity vector (km/s)
-    mu: gravitational parameter (km^3/s^2), default is Earth's
+# --- 2. Your Analytic Jacobian Function ---
+def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
+    x, y, z = r_vec
+    r2 = x*x + y*y + z*z
+    r = np.sqrt(r2)
+    r3, r5, r7, r9, r11 = r**3, r**5, r**7, r**9, r**11
+    
+    # coeffs[1] is J2, coeffs[2] is J3
+    J2, J3 = coeffs[1], coeffs[2]
+    
+    G = -(mu/r3) * np.eye(3) + (3*mu/r5) * np.outer(r_vec, r_vec)
+    
+    j2_c = -1.5 * mu * J2 * Re**2
+    G_j2 = j2_c * np.array([
+        [1/r5 - 5*(x**2+z**2)/r7 + 35*x**2*z**2/r9, -5*x*y/r7 + 35*x*y*z**2/r9, -15*x*z/r7 + 35*x*z**3/r9],
+        [-5*x*y/r7 + 35*x*y*z**2/r9, 1/r5 - 5*(y**2+z**2)/r7 + 35*y**2*z**2/r9, -15*y*z/r7 + 35*y*z**3/r9],
+        [-15*x*z/r7 + 35*x*z**3/r9, -15*y*z/r7 + 35*y*z**3/r9, 3/r5 - 30*z**2/r7 + 35*z**4/r9]
+    ])
+    
+    j3_c = -2.5 * mu * J3 * Re**3
+    G_j3 = j3_c * np.array([
+        [3*z/r7 - 21*x**2*z/r9 - 7*z**3/r9 + 63*x**2*z**3/r11, -21*x*y*z/r9 + 63*x*y*z**3/r11, 3*x/r7 - 42*x*z**2/r9 + 63*x*z**4/r11],
+        [-21*x*y*z/r9 + 63*x*y*z**3/r11, 3*z/r7 - 21*y**2*z/r9 - 7*z**3/r9 + 63*y**2*z**3/r11, 3*y/r7 - 42*y*z**2/r9 + 63*y*z**4/r11],
+        [3*x/r7 - 42*x*z**2/r9 + 63*x*z**4/r11, 3*y/r7 - 42*y*z**2/r9 + 63*y*z**4/r11, 15*z/r7 - 70*z**3/r9 + 63*z**5/r11]
+    ])
+    
+    A = np.zeros((9, 9))
+    A[0:3, 3:6] = np.eye(3)
+    A[3:6, 0:3] = G + G_j2 + G_j3
 
-    Returns: mean motion n (rad/s)
-    """
-    r = np.array(r)
-    v = np.array(v)
-    r_norm = np.linalg.norm(r)
-    v_norm = np.linalg.norm(v)
+    a_pm = -(mu/r3) * r_vec
+    a_j2 = j2_c * np.array([x/r5 * (1 - 5*z**2/r2), y/r5 * (1 - 5*z**2/r2), z/r5 * (3 - 5*z**2/r2)])
+    a_j3 = j3_c * np.array([x/r7 * (3*z - 7*z**3/r2), y/r7 * (3*z - 7*z**3/r2), 1/r7 * (6*z**2 - 7*z**4/r2 - 0.6*r2)])
+    
+    A[3:6, 6] = (a_pm + a_j2 + a_j3) / mu  # wrt mu
+    A[3:6, 7] = a_j2 / J2                # wrt J2
+    A[3:6, 8] = a_j3 / J3                # wrt J3
+    return A
 
-    # Specific orbital energy
-    energy = v_norm**2 / 2 - mu / r_norm
+# --- 3. Equations of Motion ---
+def zonal_sph_ode(t, state, mu, re, j2, j3):
+    r_vec = state[0:3]
+    v_vec = state[3:6]
+    Phi = state[9:].reshape((9, 9))
+    
+    r = np.linalg.norm(r_vec)
+    
+    # Dynamics include Point Mass + J2 only (J3=0 in force model)
+    a_pm = -(mu / r**3) * r_vec
+    factor_j2 = 1.5 * j2 * mu * (re**2 / r**5)
+    a_j2 = factor_j2 * np.array([
+        r_vec[0]*(5*(r_vec[2]/r)**2 - 1),
+        r_vec[1]*(5*(r_vec[2]/r)**2 - 1),
+        r_vec[2]*(5*(r_vec[2]/r)**2 - 3)
+    ])
+    
+    dvdt = a_pm + a_j2
+    
+    # Jacobian for STM (Calculates how J2 and J3 would affect the path)
+    A = get_zonal_jacobian(r_vec, v_vec, mu, [0, j2, j3], Re=re)
+    Phi_dot = A @ Phi
+    
+    return np.concatenate([v_vec, dvdt, [0,0,0], Phi_dot.flatten()])
 
-    # Semi-major axis
-    a = -mu / (2 * energy)
+# --- 4. Main Simulation ---
+R_EARTH = 6378.0
+MU = 398600.4415
+J2 = 1.0826269e-3
+J3 = -2.532e-6 # Stored as a parameter but not used in dvdt
 
-    # Mean motion
-    n = np.sqrt(mu / a**3)
+# Initial Conditions using your function
+r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, mu=MU, units='deg')
+X0_ref = np.concatenate([r0, v0, [MU, J2, J3]])
+state0 = np.concatenate([X0_ref, np.eye(9).flatten()])
 
-    return n
+# Perturbation
+dx0 = np.zeros(9)
+dx0[0], dx0[4] = 1.0, 0.01 # 1km in X, 10m/s in Vy
+state_pert0 = np.concatenate([X0_ref + dx0, np.eye(9).flatten()])
 
-# Compute inertial state vector from LROEs
-def lroes_to_inertial(t, chief_r, chief_v, lroes, mu=MU_EARTH):
-    """
-    Convert LROEs to inertial state vectors (r, v) of the deputy.
+T_orbit = 2 * np.pi * np.sqrt(10000**3 / MU)
+t_span = (0, 15 * T_orbit)
+t_eval = np.linspace(0, t_span[1], 1000)
 
-    Inputs:
-        t: time [s]
-        chief_r: chief inertial position vector [km]
-        chief_v: chief inertial velocity vector [km/s]
-        lroes: linear relative orbital elements [A_0, B_0, alpha, beta, x_offset, y_offset] in km and !!RADIANS!!
-        mu: gravitational parameter [km^3/s^2]
+sol_ref = solve_ivp(zonal_sph_ode, t_span, state0, t_eval=t_eval, args=(MU, R_EARTH, J2, J3), rtol=1e-11, atol=1e-11)
+sol_pert = solve_ivp(zonal_sph_ode, t_span, state_pert0, t_eval=t_eval, args=(MU, R_EARTH, J2, J3), rtol=1e-11, atol=1e-11)
 
-    Returns:
-        r_deputy: deputy inertial position vector [km]
-        v_deputy: deputy inertial velocity vector [km/s]
-    """
-    chief_r = np.array(chief_r)
-    chief_v = np.array(chief_v)
-    A_0, B_0, alpha, beta, x_offset, y_offset = lroes
+# --- 5. Deviation Analysis & Plotting ---
+delta_x_true = sol_pert.y[:6, :].T - sol_ref.y[:6, :].T
+delta_x_stm = np.zeros((len(t_eval), 6))
+for k in range(len(t_eval)):
+    Phi_t = sol_ref.y[9:, k].reshape((9, 9))
+    delta_x_stm[k, :] = Phi_t[:6, :6] @ dx0[:6]
 
-    # Compute chief mean motion
-    n = compute_mean_motion_from_ECI(chief_r, chief_v, mu)
+fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
+t_hrs = t_eval / 3600
+labels = ['X', 'Y', 'Z', 'Vx', 'Vy', 'Vz']
 
-    # Compute A_1 and A_2
-    A_1 = A_0 * np.cos(alpha)
-    A_2 = A_0 * np.sin(alpha)
+for i in range(6):
+    ax = axes[i//3, i%3]
+    scale = 1000 if i >= 3 else 1
+    ax.plot(t_hrs, delta_x_true[:, i] * scale, 'royalblue', label='Nonlinear Truth')
+    ax.plot(t_hrs, delta_x_stm[:, i] * scale, 'k--', alpha=0.8, label='STM Prediction')
+    ax.set_title(f'{labels[i]} Deviation')
+    ax.legend(fontsize='small')
 
-    # Compute B_1 and B_2
-    B_1 = B_0 * np.cos(beta)
-    B_2 = B_0 * np.sin(beta)
-
-    # Compute position state
-    x = A_1 * np.cos(n*t) - A_2 * np.sin(n*t) + x_offset
-    y = -2*A_1 * np.sin(n*t) - 2*A_2 * np.cos(n*t) - (3/2)*(n*x_offset*t) + y_offset
-    z = B_1 * np.cos(n*t) + B_2 * np.sin(n*t)
-
-    # Compute position state
-    x_dot = -A_1*n*np.sin(n*t) - A_2*n*np.cos(n*t)
-    y_dot = -2*A_1*n*np.cos(n*t) + 2*A_2*n*np.sin(n*t) - (3/2)*n*x_offset
-    z_dot = -B_1*n*np.sin(n*t) + B_2*n*np.cos(n*t)
-
-    # LVLH relative state vectors
-    deputy_rho = np.array([x, y, z])
-    deputy_rho_dot = np.array([x_dot, y_dot, z_dot])
-
-    # Convert to inertial frame
-    deputy_r, deputy_v = rel_vector_to_inertial(deputy_rho, deputy_rho_dot, chief_r, chief_v) 
-
-    return deputy_r, deputy_v
-
-
-def _wrap01(x):
-    # wrap to [0, 2π)
-    return np.mod(x, 2*np.pi)
-
-def ta_to_m(TA, e):
-    """
-    True anomaly -> Mean anomaly (elliptic 0<=e<1).
-    Handles scalar or ndarray TA. Returns M in [0,2π).
-    """
-    TA = np.atleast_1d(TA).astype(float)
-    # principal eccentric anomaly via atan2 form (robust)
-    # tan(E/2) = sqrt((1-e)/(1+e)) * tan(TA/2)
-    E = 2.0 * np.arctan2(np.sqrt(1.0 - e) * np.sin(TA/2.0),
-                         np.sqrt(1.0 + e) * np.cos(TA/2.0))
-    E = _wrap01(E)
-    M = E - e * np.sin(E)
-    M = _wrap01(M)
-    return M.squeeze()
-
-def m_to_ta(M, e, tol=1e-12, max_iter=100):
-    """
-    Mean anomaly -> True anomaly (elliptic 0<=e<1) using Newton-Raphson.
-    Returns TA in [0, 2π).
-    TA and E match the shape of input M (scalar or array).
-    """
-    M_in = np.atleast_1d(M).astype(float)
-    M_wrapped = _wrap01(M_in)
-
-    # initial guess for E
-    E = np.copy(M_wrapped)
-    # better guess for larger e
-    mask = (e >= 0.8)
-    if np.isscalar(E):
-        if e >= 0.8:
-            E = np.pi
-    else:
-        E[mask] = np.pi
-
-    # Newton-Raphson solve for E
-    for _ in range(max_iter):
-        f = E - e * np.sin(E) - M_wrapped
-        fprime = 1.0 - e * np.cos(E)
-        dE = f / fprime
-        E = E - dE
-        if np.max(np.abs(dE)) < tol:
-            break
-    else:
-        raise RuntimeError("Kepler solve did not converge")
-
-    E = _wrap01(E)
-    # convert E->TA robustly using atan2 form
-    sinv = np.sqrt(1.0 + e) * np.sin(E/2.0)
-    cosv = np.sqrt(1.0 - e) * np.cos(E/2.0)
-    TA = 2.0 * np.arctan2(sinv, cosv)
-    TA = _wrap01(TA)
-
-    # return shapes consistent with scalar input
-    if np.isscalar(M):
-        return float(TA.squeeze())
-    return TA.squeeze()
-
-def normalize_angle(angle):
-    """Wrap angle to [-pi, pi)."""
-    a = (angle + np.pi) % (2.0 * np.pi) - np.pi
-    return a
+plt.tight_layout()
+plt.show()

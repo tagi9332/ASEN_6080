@@ -1,190 +1,190 @@
-# Script to propagate initial conditions with a small perturbation
-import os, sys
 import numpy as np
 import matplotlib.pyplot as plt
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
-from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from scipy.integrate import solve_ivp
 
-def dfdx_wJ2J3(r_vec, mu, J2, J3, Re=6378.0,use_J2=True,use_J3=True):
-    
+# Analytic Jacobian for Zonal Harmonics
+def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
+    """
+    State: [x, y, z, vx, vy, vz, mu, J2, J3]
+    coeffs[1] = J2, coeffs[2] = J3
+    """
     x, y, z = r_vec
-    r2 = np.dot(r_vec, r_vec)
-    r = np.sqrt(r2) 
-    r3, r5, r7, r9, r11 = r**3, r**5, r**7, r**9, r**11
+    r2 = x*x + y*y + z*z
+    r = np.sqrt(r2)
     
-    # Build the 3x3 Gravity Gradient
-    # Point Mass
-    G = -(mu/r3) * np.eye(3) + (3*mu/r5) * np.outer(r_vec, r_vec)
+    # Fundamental r-powers used by all components
+    r3 = r**3
+    r5 = r**5
     
-    # J2 Contribution if enabled
-    if use_J2:
+    J2, J3 = coeffs[1], coeffs[2]
+    
+    # Point Mass Gravity Gradient
+    G_total = -(mu/r3) * np.eye(3) + (3*mu/r5) * np.outer(r_vec, r_vec)
+    
+    # Point Mass Acceleration
+    a_pm = -(mu/r3) * r_vec
+    a_total = a_pm.copy()
+
+    # J2 (if non-zero)
+    if J2 != 0:
+        r7 = r**7
+        r9 = r**9
         j2_c = -1.5 * mu * J2 * Re**2
-        G_j2 = np.array([
-            [1/r5 - 5*x**2/r7 - 5*z**2/r7 + 35*x**2*z**2/r9, -5*x*y/r7 + 35*x*y*z**2/r9, -15*x*z/r7 + 35*x*z**3/r9],
-            [-5*x*y/r7 + 35*x*y*z**2/r9, 1/r5 - 5*y**2/r7 - 5*z**2/r7 + 35*y**2*z**2/r9, -15*y*z/r7 + 35*y*z**3/r9],
+        
+        G_j2 = j2_c * np.array([
+            [1/r5 - 5*(x**2+z**2)/r7 + 35*x**2*z**2/r9, -5*x*y/r7 + 35*x*y*z**2/r9, -15*x*z/r7 + 35*x*z**3/r9],
+            [-5*x*y/r7 + 35*x*y*z**2/r9, 1/r5 - 5*(y**2+z**2)/r7 + 35*y**2*z**2/r9, -15*y*z/r7 + 35*y*z**3/r9],
             [-15*x*z/r7 + 35*x*z**3/r9, -15*y*z/r7 + 35*y*z**3/r9, 3/r5 - 30*z**2/r7 + 35*z**4/r9]
         ])
-        G += j2_c * G_j2
-    
-    # J3 Contribution if enabled
-    if use_J3:
+        
+        a_j2 = j2_c * np.array([
+            x/r5 * (1 - 5*z**2/r2), 
+            y/r5 * (1 - 5*z**2/r2), 
+            z/r5 * (3 - 5*z**2/r2)
+        ])
+        
+        G_total += G_j2
+        a_total += a_j2
+    else:
+        a_j2 = np.zeros(3)
+
+    # J3 (if non-zero)
+    if J3 != 0:
+        r7 = r**7 if J2 == 0 else r7 # Ensure r7 exists if J2 was skipped
+        r9 = r**9 if J2 == 0 else r9
+        r11 = r**11
         j3_c = -2.5 * mu * J3 * Re**3
-        G_j3 = np.array([
+        
+        G_j3 = j3_c * np.array([
             [3*z/r7 - 21*x**2*z/r9 - 7*z**3/r9 + 63*x**2*z**3/r11, -21*x*y*z/r9 + 63*x*y*z**3/r11, 3*x/r7 - 42*x*z**2/r9 + 63*x*z**4/r11],
             [-21*x*y*z/r9 + 63*x*y*z**3/r11, 3*z/r7 - 21*y**2*z/r9 - 7*z**3/r9 + 63*y**2*z**3/r11, 3*y/r7 - 42*y*z**2/r9 + 63*y*z**4/r11],
             [3*x/r7 - 42*x*z**2/r9 + 63*x*z**4/r11, 3*y/r7 - 42*y*z**2/r9 + 63*y*z**4/r11, 15*z/r7 - 70*z**3/r9 + 63*z**5/r11]
         ])
-        G += j3_c * G_j3
+        
+        a_j3 = j3_c * np.array([
+            x/r7 * (3*z - 7*z**3/r2), 
+            y/r7 * (3*z - 7*z**3/r2), 
+            1/r7 * (6*z**2 - 7*z**4/r2 - 0.6*r2)
+        ])
+        
+        G_total += G_j3
+        a_total += a_j3
+    else:
+        a_j3 = np.zeros(3)
 
-# Build the 3x3 Sensitivity Matrix (S = del_a / del_params)    
-    j2_c = -1.5 * mu * J2 * Re**2
-    j3_c = -2.5 * mu * J3 * Re**3
-
-    # Point Mass Acceleration 
-    a_pm = -(mu / r3) * r_vec
-    
-    # J2 Acceleration
-    vec_j2 = np.array([
-        x * (1/r5 - 5*z**2/r7),
-        y * (1/r5 - 5*z**2/r7),
-        z * (3/r5 - 5*z**2/r7)
-    ])
-    a_j2 = j2_c * vec_j2
-    
-    # J3 Acceleration
-    vec_j3 = np.array([
-        x * (3*z/r7 - 7*z**3/r9),
-        y * (3*z/r7 - 7*z**3/r9),
-        (6*z**2/r7 - 7*z**4/r9 - 0.6/r5) 
-    ])
-    a_j3 = j3_c * vec_j3
-
-    # Assemble S Matrix
-    S = np.zeros((3, 3))
-    
-    # Partial wrt mu (Total Accel / mu)
-    S[:, 0] = (a_pm + a_j2 + a_j3) / mu
-    
-    # Partial wrt J2
-    S[:, 1] = a_j2 / J2
-    
-    # Partial wrt J3
-    S[:, 2] = a_j3 / J3
-
-    # Assemble the Full 9x9 A-Matrix 
+    # Assemble Full 9x9 A-Matrix 
     A = np.zeros((9, 9))
-    A[0:3, 3:6] = np.eye(3) # dr/dv block (zeros)
-    A[3:6, 0:3] = G        # dv/dr block (Gravity Gradient)
-    A[3:6, 6:9] = S        # dv/dp block (Sensitivity)
+    A[0:3, 3:6] = np.eye(3)      # dr/dv
+    A[3:6, 0:3] = G_total       # da/dr
+    
+    # Sensitivities (da/d_params)
+    A[3:6, 6] = a_total / mu    # wrt mu
+    
+    # If J2 is zero, the sensitivity to J2 is 0 
+    if J2 != 0: A[3:6, 7] = a_j2 / J2
+    if J3 != 0: A[3:6, 8] = a_j3 / J3
     
     return A
 
+# Helper Functions
+def orbital_elements_to_cartesian(mu, a, e, i, raan, omega, nu):
+    p = a * (1 - e**2)
+    r_mag = p / (1 + e * np.cos(nu))
+    v_mag = np.sqrt(mu / p)
+    r_pqw = r_mag * np.array([np.cos(nu), np.sin(nu), 0])
+    v_pqw = v_mag * np.array([-np.sin(nu), e + np.cos(nu), 0])
+    
+    def rot_z(ang): return np.array([[np.cos(ang), -np.sin(ang), 0], [np.sin(ang), np.cos(ang), 0], [0, 0, 1]])
+    def rot_x(ang): return np.array([[1, 0, 0], [0, np.cos(ang), -np.sin(ang)], [0, np.sin(ang), np.cos(ang)]])
+    
+    R = rot_z(raan) @ rot_x(i) @ rot_z(omega)
+    return R @ r_pqw, R @ v_pqw
 
-# Equations of Motion
-def eom_with_stm(t, state_flat, mu, j2, j3, re):
-    # Unpack state: [x, y, z, vx, vy, vz, Phi(81 elements flattened)]
-    r_vec = state_flat[0:3]
-    v_vec = state_flat[3:6]
-    phi_flat = state_flat[6:]
-    Phi = phi_flat.reshape((9, 9))
+def zonal_sph_ode(t, state, mu, re, j2, j3):
+    r_vec = state[0:3]
+    v_vec = state[3:6]
+    Phi = state[9:].reshape((9, 9))
     
     r = np.linalg.norm(r_vec)
-    
-    # Calculate Accelerations
-    # Point Mass
-    a_vec = -(mu / r**3) * r_vec
-    
-    # J2 Perturbation
     x, y, z = r_vec
-    z_r2 = (z/r)**2
-    factor = 1.5 * j2 * mu * (re**2 / r**5)
-    a_j2 = factor * np.array([
-        x * (5*z_r2 - 1),
-        y * (5*z_r2 - 1),
-        z * (5*z_r2 - 3)
-    ])
     
-    # Total Acceleration
-    dvdt = a_vec + a_j2
+    # Physics
+    a_pm = -(mu / r**3) * r_vec
+    factor_j2 = 1.5 * j2 * mu * (re**2 / r**5)
+    dvdt = a_pm + factor_j2 * np.array([x*(5*(z/r)**2-1), y*(5*(z/r)**2-1), z*(5*(z/r)**2-3)])
     
-    # 2. STM Propagation: dPhi/dt = A * Phi
-    A = dfdx_wJ2J3(r_vec, mu, j2, j3, Re=re, use_J3=False)
+    # STM Propagation
+    A = get_zonal_jacobian(r_vec, v_vec, mu, [0, j2, j3], Re=re)
     Phi_dot = A @ Phi
     
-    # Pack it back up
-    return np.concatenate([v_vec, dvdt, Phi_dot.flatten()])
+    return np.concatenate([v_vec, dvdt, [0,0,0], Phi_dot.flatten()])
 
-# 1. Setup Initial Conditions
-r_init, v_init = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
-period = 2 * np.pi * np.sqrt(10000**3 / MU_EARTH)
-t_span = (0, 15 * period)
-t_eval = np.arange(0, t_span[1], 10.0)
+# Main Simulation
+R_EARTH = 6378.0
+MU = 398600.4415
+J2 = 1.0826269e-3
+J3 = 0
 
-# Initial Identity STM (9x9)
-phi_init = np.eye(9).flatten()
+r0, v0 = orbital_elements_to_cartesian(MU, 1e4, 0.001, np.radians(40), np.radians(80), np.radians(40), 0)
+X0_ref = np.concatenate([r0, v0, [MU, J2, J3]])
+state0 = np.concatenate([X0_ref, np.eye(9).flatten()])
 
-# --- RUN 1: Reference Trajectory ---
-y0_ref = np.concatenate([r_init, v_init, phi_init])
-sol_ref = solve_ivp(eom_with_stm, t_span, y0_ref, t_eval=t_eval, 
-                    args=(MU_EARTH, J2, J3, R_EARTH), rtol=1e-10, atol=1e-10, method='DOP853')
+# Perturbation
+dx0 = np.zeros(9)
+dx0[0], dx0[4] = 1.0, 0.01 # 1 km in x, 0.01 km/s in vy
+state_perturbed0 = np.concatenate([X0_ref + dx0, np.eye(9).flatten()])
 
-# --- RUN 2: Perturbed Trajectory ---
-# Add small disturbance to initial position and velocity
-dr0 = np.array([1.0, 0, 0])      # 1 km shift in X
-dv0 = np.array([0, 1e-3, 0])     # 1 m/s shift in Vy
-y0_pert = np.concatenate([r_init + dr0, v_init + dv0, phi_init])
+t_span = (0, 15 * 2 * np.pi * np.sqrt(1e4**3 / MU))
+t_eval = np.linspace(0, t_span[1], 1000)
 
-sol_pert = solve_ivp(eom_with_stm, t_span, y0_pert, t_eval=t_eval, 
-                     args=(MU_EARTH, J2, J3, R_EARTH), rtol=1e-10, atol=1e-10, method='DOP853')
+sol_ref = solve_ivp(zonal_sph_ode, t_span, state0, t_eval=t_eval, args=(MU, R_EARTH, J2, J3), rtol=1e-10, atol=1e-10)
+sol_pert = solve_ivp(zonal_sph_ode, t_span, state_perturbed0, t_eval=t_eval, args=(MU, R_EARTH, J2, J3), rtol=1e-10, atol=1e-10)
 
-# 2. Compute Differences over Time
-# We subtract the reference trajectory from the perturbed trajectory
-# Indexing [:6, :] gets X, Y, Z, VX, VY, VZ for all time steps
-diff = sol_pert.y[:6, :] - sol_ref.y[:6, :]
+# Plotting
+delta_x_true = sol_pert.y[:6, :].T - sol_ref.y[:6, :].T
+delta_x_stm = np.zeros((len(t_eval), 6))
+for k in range(len(t_eval)):
+    Phi_t = sol_ref.y[9:, k].reshape((9, 9))
+    delta_x_stm[k, :] = Phi_t[:6, :6] @ dx0[:6]
 
-# Save differences to csv for analysis
-output_path = os.path.join(os.path.dirname(__file__), 'problem_2c_differences.csv')
+fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
+t_hrs = t_eval / 3600
+colors = ['royalblue', 'seagreen', 'indianred']
+labels = ['X', 'Y', 'Z', 'Vx', 'Vy', 'Vz']
 
-# Combine time and data
-data_to_save = np.column_stack((sol_ref.t, diff.T))
+for i in range(6):
+    ax = axes[i//3, i%3]
+    scale = 1000 if i >= 3 else 1 # Convert vel to m/s
+    ax.plot(t_hrs, delta_x_true[:, i] * scale, color=colors[i%3], label='Truth')
+    ax.plot(t_hrs, delta_x_stm[:, i] * scale, 'k--', alpha=0.7, label='STM')
+    ax.set_title(f'Dev: {labels[i]}')
+    if i == 0: ax.set_ylabel('km')
+    if i == 3: ax.set_ylabel('m/s')
+    ax.legend()
 
-# fmt argument: 
-# '%.4f' makes the first column (Time) a decimal with 4 places
-# '%.10e' keeps the rest in high-precision scientific notation (standard for small orbital errors)
-formats = ['%.4f'] + ['%.10e'] * 6 
-
-np.savetxt(output_path, 
-           data_to_save, 
-           delimiter=',', 
-           header='Time(s),Delta_X(km),Delta_Y(km),Delta_Z(km),Delta_VX(km/s),Delta_VY(km/s),Delta_VZ(km/s)', 
-           fmt=formats,
-           comments='')
-
-print(f"File saved to: {output_path}")
-
-
-# 3. Plot Results
-fig, axs = plt.subplots(2, 1, figsize=(10, 8))
-time_hours = sol_ref.t / 3600.0
-axs[0].plot(time_hours, diff[0, :], label='ΔX (km)')
-axs[0].plot(time_hours, diff[1, :], label='ΔY (km)')
-axs[0].plot(time_hours, diff[2, :], label='ΔZ (km)')
-axs[0].set_title('Position Differences Over Time')
-axs[0].set_xlabel('Time (hours)')
-axs[0].set_ylabel('Position Difference (km)')
-axs[0].legend()
-axs[0].grid()
-axs[1].plot(time_hours, diff[3, :]*1000, label='ΔVX (m/s)')
-axs[1].plot(time_hours, diff[4, :]*1000, label='ΔVY (m/s)')
-axs[1].plot(time_hours, diff[5, :]*1000, label='ΔVZ (m/s)')
-axs[1].set_title('Velocity Differences Over Time')
-axs[1].set_xlabel('Time (hours)')
-axs[1].set_ylabel('Velocity Difference (m/s)')
-axs[1].legend()
-axs[1].grid()
 plt.tight_layout()
 plt.show()
 
+# Plot residuals
+residuals = delta_x_true - delta_x_stm
+
+# Create a 2x3 grid for Residuals
+fig_res, axes_res = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
+fig_res.suptitle('Residuals: Nonlinear Truth minus STM Prediction', fontsize=16)
+
+for i in range(6):
+    ax = axes_res[i//3, i%3]
+    scale = 1000 if i >= 3 else 1  # Convert velocity to m/s
+    unit = "m/s" if i >= 3 else "km"
+    
+    ax.plot(t_hrs, residuals[:, i] * scale, color='crimson', linewidth=1.5)
+    ax.set_title(f'Residual {labels[i]}')
+    ax.grid(True, alpha=0.3)
+    
+    if i % 3 == 0:
+        ax.set_ylabel(f'Error ({unit})')
+    if i >= 3:
+        ax.set_xlabel('Time (hours)')
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()

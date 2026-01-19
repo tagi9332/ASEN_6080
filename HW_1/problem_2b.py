@@ -120,6 +120,8 @@ phi_error = deriv[7:] - np.array(truth_phi).flatten()
 
 print("\n--- State Error ---")
 print(state_error)
+print("max abs state error:", np.max(np.abs(state_error)))
 
 print("\n--- Phi Error ---")
 print(phi_error)
+print("max abs phi error:", np.max(np.abs(phi_error)))
