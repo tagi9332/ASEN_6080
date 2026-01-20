@@ -168,11 +168,6 @@ if __name__ == "__main__":
     num_times = len(times)
     num_stations = stations.shape[0]
 
-    # Measurement indices (every 10 seconds)
-    indices = list(range(0, num_times, 10))
-    if (num_times - 1) not in indices:
-        indices.append(num_times - 1)
-
     # Lists to store data for plotting
     times_visible = []
     ranges = []
@@ -182,7 +177,7 @@ if __name__ == "__main__":
     print("--- Processing Measurements ---")
 
     # Loop through each time and ground station
-    for i in indices:
+    for i in range(num_times):
         for j in range(num_stations):
             sc_pos = sc_positions[i, :]
             sc_vel = sc_velocities[i, :]
@@ -220,7 +215,7 @@ if __name__ == "__main__":
     custom_colors = [
         '#ff7f0e', # Orange
         '#1f77b4', # Blue
-        '#2ca02c'  # Green
+        "#2ba12b"  # Green
     ]
     custom_cmap = ListedColormap(custom_colors)
 
@@ -254,13 +249,13 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 5))
     for j in range(num_stations):
         el_angles = []
-        for i in indices:
+        for i in range(num_times):
             sc_pos = sc_positions[i, :]
             gs_pos = gs_inertial_positions[i, j, :]
             _, el_angle = compute_gs_visibility(
                 sc_pos.reshape(1, 3), gs_pos.reshape(1, 3), elevation_mask)
             el_angles.append(np.rad2deg(el_angle))
-        plt.plot(times[indices], el_angles, label=f'Station {j+1}')
+        plt.plot(times, el_angles, label=f'Station {j+1}')
     plt.axhline(np.rad2deg(elevation_mask), color='r', linestyle='--', label='Elevation Mask')
     plt.xlabel('Time (seconds)')
     plt.ylabel('Elevation Angle (degrees)')
@@ -268,7 +263,6 @@ if __name__ == "__main__":
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
-    plt.savefig('Elevation_Angles.pdf', dpi=300)
     plt.show()
 
     # Part D: Doppler shift data visualization
@@ -294,7 +288,6 @@ if __name__ == "__main__":
     ax2.set_xlabel('Time (seconds)')
     ax2.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
-    plt.savefig('Range_RU_Doppler_Shift.pdf', dpi=300)
     plt.show()
 
     # Part d: Add Gaussian noise to range-rate measurements
@@ -328,5 +321,4 @@ if __name__ == "__main__":
     plt.grid(True, linestyle='--', alpha=0.5)
 
     plt.tight_layout()
-    plt.savefig('HW1_Noise_Comparison.pdf', dpi=300)
     plt.show()
