@@ -1,10 +1,12 @@
 import numpy as np
 
-def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
+def get_zonal_jacobian(r_vec, v_vec, coeffs):
     """
     State: [x, y, z, vx, vy, vz, mu, J2, J3]
     coeffs[1] = J2, coeffs[2] = J3
     """
+    Re = 6378.0 # Earth's radius in km
+
     x, y, z = r_vec
     r2 = x*x + y*y + z*z
     r = np.sqrt(r2)
@@ -13,7 +15,7 @@ def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
     r3 = r**3
     r5 = r**5
     
-    J2, J3 = coeffs[1], coeffs[2]
+    mu, J2, J3 = coeffs[0], coeffs[1], coeffs[2]
     
     # Point Mass Gravity Gradient
     G_total = -(mu/r3) * np.eye(3) + (3*mu/r5) * np.outer(r_vec, r_vec)
@@ -84,7 +86,9 @@ def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
     return A
 
 
-def zonal_sph_ode(t, state, mu, re, j2, j3):
+def zonal_sph_ode(t, state,coeffs):
+    re = 6378.0 # Earth's radius in km
+
     r_vec = state[0:3]
     v_vec = state[3:6]
     Phi = state[9:].reshape((9, 9))
@@ -93,12 +97,13 @@ def zonal_sph_ode(t, state, mu, re, j2, j3):
     x, y, z = r_vec
     
     # Physics
+    mu, j2, j3 = coeffs[0], coeffs[1], coeffs[2]
     a_pm = -(mu / r**3) * r_vec
     factor_j2 = 1.5 * j2 * mu * (re**2 / r**5)
     dvdt = a_pm + factor_j2 * np.array([x*(5*(z/r)**2-1), y*(5*(z/r)**2-1), z*(5*(z/r)**2-3)])
     
     # STM Propagation
-    A = get_zonal_jacobian(r_vec, v_vec, mu, [0, j2, j3], Re=re)
+    A = get_zonal_jacobian(r_vec, v_vec, [mu, j2, j3])
     Phi_dot = A @ Phi
     
-    return np.concatenate([v_vec, dvdt, [0,0,0], Phi_dot.flatten()])
+    return np.concatenate([v_vec, dvdt, Phi_dot.flatten()])
