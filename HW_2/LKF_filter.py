@@ -110,7 +110,7 @@ def compute_H_matrix(R, V, Rs, Vs):
 # Linearized Kalman Filter
 # ============================================================
 def run_lkf(sol, meas_df, dx_0, P0, Rk):
-    n = 6  
+    n = 6 
     dx = dx_0.copy()
     P = P0.copy()
     I = np.eye(n)
@@ -120,7 +120,7 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk):
     P_hist = []
     corrected_state_hist = []
     innovations = []
-    prefit_residuals = [] # Added initialization
+    prefit_residuals = [] 
     
     Phi_prev = np.eye(n)
 
@@ -130,32 +130,32 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk):
         # Incremental STM: Phi(tk, tk-1)
         Phi_incr = Phi_global @ np.linalg.inv(Phi_prev)
         
-        # 1. Prediction
+        # Prediction Step
         dx_pred = Phi_incr @ dx
         P_pred = Phi_incr @ P @ Phi_incr.T
         
-        # 2. Observation Data
-        row = meas_df.iloc[k]
-        station_idx = int(row['Station_ID']) - 1
+        # Observation Data
+        meas_row = meas_df.iloc[k]
+        station_idx = int(meas_row['Station_ID']) - 1
         Rs, Vs = get_gs_eci_state(stations_ll[station_idx][0], 
                                  stations_ll[station_idx][1], 
                                  sol.t[k])
         
         x_ref = sol.y[0:6, k]
-        y_ref, H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
-        y_obs = np.array([row['Range(km)'], row['Range_Rate(km/s)']])
+        y_pred, H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
+        y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
 
-        # 3. Residuals
-        innovation = y_obs - y_ref
-        current_prefit = innovation - H @ dx_pred # The "post-prediction" residual
+        # Measurement Update
+        prefit_residual = y_obs - y_pred
+        innovation = prefit_residual - H @ dx_pred # The "post-prediction" residual
 
         # 4. Kalman Gain & Update
         S = H @ P_pred @ H.T + Rk
         K = P_pred @ H.T @ np.linalg.inv(S)
         
-        dx = dx_pred + K @ current_prefit
+        dx = dx_pred + K @ innovation
         
-        # Joseph Form for stability
+        # Covartiance Update (Joseph Form)
         IKH = I - K @ H
         P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
 
@@ -163,8 +163,8 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk):
         dx_hist.append(dx.copy())
         P_hist.append(P.copy())
         corrected_state_hist.append(x_ref + dx)
-        innovations.append(innovation)
-        prefit_residuals.append(current_prefit) # Store for returning
+        innovations.append(prefit_residual)
+        prefit_residuals.append(innovation) # Store for returning
 
         Phi_prev = Phi_global
 
@@ -185,6 +185,7 @@ state0 = np.concatenate([r0, v0, Phi0])
 df_meas = pd.read_csv(r'HW_2\measurements_noisy_2.csv')
 time_eval = df_meas['Time(s)'].values
 
+# Doing a nonlinear integration to get the reference trajectory (kinda cheating here)
 print("Integrating 6x6 Reference Trajectory...")
 sol = solve_ivp(zonal_sph_ode, (0, time_eval[-1]), state0, t_eval=time_eval, rtol=1e-10, atol=1e-10)
 
