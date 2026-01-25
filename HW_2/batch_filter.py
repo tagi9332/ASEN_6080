@@ -14,102 +14,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 # Note: Ensure these paths and constants match your local environment
 from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
 from resources.constants import MU_EARTH, J2, J3, R_EARTH
-
-# Ground Stations (lat, lon) [rad]
-stations_ll = np.deg2rad([
-    [-35.398333, 148.981944], # Station 1 (Canberra, Australia)
-    [ 40.427222, 355.749444], # Station 2 (Fort Davis, USA)
-    [ 35.247164, 243.205000]  # Station 3 (Madrid, Spain)
-])
+from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
+from utils.ground_station_utils.gs_latlon import get_gs_eci_state
+from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix
 
 # ============================================================
-# Dynamics & Jacobian (Strictly 6x6)
+# Batch Filter
 # ============================================================
-def get_zonal_jacobian(r_vec, params):
-    mu, j2_val, _ = params  # J3 not used in this specific G matrix for simplicity
-    x, y, z = r_vec
-    r2 = np.dot(r_vec, r_vec)
-    r = np.sqrt(r2)
-    r3, r5, r7 = r**3, r**5, r**7
-
-    # Point-mass gravity gradient
-    G = -(mu / r3) * np.eye(3) + (3 * mu / r5) * np.outer(r_vec, r_vec)
-
-    # J2 Contribution to Gravity Gradient
-    if j2_val != 0.0:
-        j2c = -1.5 * mu * j2_val * R_EARTH**2
-        G_j2 = j2c * np.array([
-            [1/r5 - 5*(x*x+z*z)/r7, -5*x*y/r7,           -15*x*z/r7],
-            [-5*x*y/r7,           1/r5 - 5*(y*y+z*z)/r7, -15*y*z/r7],
-            [-15*x*z/r7,          -15*y*z/r7,            3/r5 - 30*z*z/r7]
-        ])
-        G += G_j2
-
-    # Assemble 6x6 A matrix
-    A = np.zeros((6, 6))
-    A[0:3, 3:6] = np.eye(3)
-    A[3:6, 0:3] = G
-    return A
-
-def zonal_sph_ode(t, state):
-    r = state[0:3]
-    v = state[3:6]
-    Phi = state[6:].reshape(6, 6)
-    
-    rnorm = np.linalg.norm(r)
-    
-    # Acceleration (Point Mass + J2)
-    a_pm = -(MU_EARTH / rnorm**3) * r
-    factor_j2 = 1.5 * J2 * MU_EARTH * (R_EARTH**2 / rnorm**5)
-    a_j2 = factor_j2 * np.array([
-        r[0]*(5*(r[2]/rnorm)**2 - 1),
-        r[1]*(5*(r[2]/rnorm)**2 - 1),
-        r[2]*(5*(r[2]/rnorm)**2 - 3)
-    ])
-    a = a_pm + a_j2
-
-    # STM Dynamics (6x6)
-    A = get_zonal_jacobian(r, [MU_EARTH, J2, J3])
-    Phi_dot = A @ Phi
-
-    return np.concatenate([v, a, Phi_dot.flatten()])
-
-# ============================================================
-# Measurement & Station Models
-# ============================================================
-def get_gs_eci_state(lat, lon, time, init_theta=122):
-    omega_earth = 7.2921159e-5  
-    theta_total = np.deg2rad(init_theta) + (omega_earth * time) + lon
-    cos_lat = np.cos(lat)
-    
-    Rs = np.array([
-        R_EARTH * cos_lat * np.cos(theta_total),
-        R_EARTH * cos_lat * np.sin(theta_total),
-        R_EARTH * np.sin(lat)
-    ])
-    Vs = np.array([-omega_earth * Rs[1], omega_earth * Rs[0], 0.0])
-    return Rs, Vs
-
-def compute_H_matrix(R, V, Rs, Vs):
-    rho_vec = R - Rs
-    v_rel = V - Vs
-    rho = np.linalg.norm(rho_vec)
-    rho_dot = np.dot(rho_vec, v_rel) / rho
-
-    d_rho_dR = rho_vec / rho
-    d_rhodot_dR = (v_rel - (rho_dot * d_rho_dR)) / rho
-    d_rhodot_dV = d_rho_dR
-
-    H = np.zeros((2, 6))
-    H[0, 0:3] = d_rho_dR
-    H[1, 0:3] = d_rhodot_dR
-    H[1, 3:6] = d_rhodot_dV
-    return np.array([rho, rho_dot]), H
-
-# ============================================================
-# Linearized Kalman Filter
-# ============================================================
-def run_iterative_batch(state0_initial, df_meas, P0_prior, Rk, max_iterations=10, tolerance=1e-7):
+def run_iterative_batch(state0_initial, df_meas, P0_prior, Rk, max_iterations=10, tolerance=1e-10):
     """
     Performs Differential Correction (Iterative Least Squares).
     """
@@ -125,9 +37,9 @@ def run_iterative_batch(state0_initial, df_meas, P0_prior, Rk, max_iterations=10
         state_to_integrate = np.concatenate([curr_x0, phi0])
         
         # 1. Integrate the NEW reference trajectory
-        sol = solve_ivp(zonal_sph_ode, (0, df_meas['Time(s)'].values[-1]), 
+        sol = solve_ivp(zonal_sph_ode_6x6, (0, df_meas['Time(s)'].values[-1]), 
                         state_to_integrate, t_eval=df_meas['Time(s)'].values, 
-                        rtol=1e-10, atol=1e-10)
+                        args=([MU_EARTH, J2, 0],), rtol=1e-10, atol=1e-10)
         
         # 2. Accumulate Normal Equations
         info_matrix = np.linalg.inv(P0_prior)
@@ -141,7 +53,7 @@ def run_iterative_batch(state0_initial, df_meas, P0_prior, Rk, max_iterations=10
             station_idx = int(row['Station_ID']) - 1
             Rs, Vs = get_gs_eci_state(stations_ll[station_idx][0], 
                                       stations_ll[station_idx][1], 
-                                      sol.t[k])
+                                      sol.t[k], init_theta = np.deg2rad(122))
             
             x_ref = sol.y[0:6, k]
             y_ref, H_tilde = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
@@ -187,9 +99,7 @@ def compute_final_batch_stats(sol, df_meas, P0_final, dx0_final):
         Phi_tk_t0 = sol.y[6:, k].reshape(n, n)
         x_ref = sol.y[0:6, k]
         
-        # Map deviation and covariance forward in time
-        # In a converged batch, dx_k should be near zero because x_ref 
-        # is now based on the corrected x0.
+        # Propagate state deviation and covariance to time tk
         dx_k = Phi_tk_t0 @ dx0_final 
         P_k = Phi_tk_t0 @ P0_final @ Phi_tk_t0.T
         
@@ -224,6 +134,13 @@ r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
 state0_initial = np.concatenate([r0, v0, Phi0])
 
+# Ground Stations (lat, lon) [rad]
+stations_ll = np.deg2rad([
+    [-35.398333, 148.981944], # Station 1 (Canberra, Australia)
+    [ 40.427222, 355.749444], # Station 2 (Fort Davis, USA)
+    [ 35.247164, 243.205000]  # Station 3 (Madrid, Spain)
+])
+
 # Load Measurements
 df_meas = pd.read_csv(r'HW_2\measurements_noisy_2.csv')
 
@@ -256,7 +173,7 @@ axes = axes.flatten()
 
 for i in range(6):
     # Remove the [1:, i] and use [:, i] to match the full length of 'times'
-    axes[i].plot(times, dx_hist[:, i] * 1000, 'b', label='Estimate')
+    axes[i].scatter(times, dx_hist[:, i] * 1000, c='b', label='Estimate', s=2)  # Convert km to m for position states
     # axes[i].plot(times, 3*sigmas[:, i], 'r--', alpha=0.7, label=fr'3$\sigma$')
     # axes[i].plot(times, -3*sigmas[:, i], 'r--', alpha=0.7)
     
@@ -269,7 +186,6 @@ for i in range(6):
 plt.xlabel('Time (s)')
 plt.tight_layout()
 plt.show()
-
 
 # ============================================================
 # Residual Plotting & Gaussian Distribution Analysis

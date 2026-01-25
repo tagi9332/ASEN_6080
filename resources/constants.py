@@ -11,4 +11,7 @@ R_EARTH = 6378.0  # km, Earth radius
 J2 = 1.082626982e-3
 J3 = -2.5324105e-6
 
+# Earth rotation rate [rad/s]
+OMEGA_EARTH = 7.2921158553e-5
+
 

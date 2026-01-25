@@ -12,85 +12,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Local Imports
 from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
-from resources.constants import MU_EARTH, J2
+from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-from utils.ground_station_utils.gs_latlon import get_gs_eci_state
-from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix
-
-# ============================================================
-# Linearized Kalman Filter
-# ============================================================
-def run_lkf(sol, meas_df, dx_0, P0, Rk,Q):
-    n = 6 
-    dx = dx_0.copy()
-    P = P0.copy()
-    I = np.eye(n)
-
-    # --- Initialize all storage arrays ---
-    dx_hist = []
-    P_hist = []
-    corrected_state_hist = []
-    innovations = []
-    postfit_residuals = []
-    S_hist = [] 
-    
-    Phi_prev = np.eye(n)
-
-    for k in range(len(sol.t)):
-        Phi_global = sol.y[6:, k].reshape(n, n)
-        
-        # Incremental STM: Phi(tk, tk-1)
-        Phi_incr = Phi_global @ np.linalg.inv(Phi_prev)
-        
-        # Prediction Step
-        dx_pred = Phi_incr @ dx
-        P_pred = Phi_incr @ P @ Phi_incr.T + (Q*(sol.t[k] - sol.t[k-1]) if k > 0 else 0)
-        
-        # Observation Data
-        meas_row = meas_df.iloc[k]
-        station_idx = int(meas_row['Station_ID']) - 1
-        Rs, Vs = get_gs_eci_state(stations_ll[station_idx][0], 
-                                 stations_ll[station_idx][1], 
-                                 sol.t[k], init_theta=np.deg2rad(122))
-        
-        x_ref = sol.y[0:6, k]
-        y_pred, H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
-        y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
-
-        # Residuals
-        y_pred_total = y_pred + H @ dx_pred
-
-        # Measurement Update
-        prefit_residual = y_obs - y_pred_total
-
-        # Kalman Gain & Update
-        S = H @ P_pred @ H.T + Rk
-        K = P_pred @ H.T @ np.linalg.inv(S)
-        
-        # Update state deviation and covariance
-        dx = dx_pred + K @ prefit_residual
-        postfit_residual = y_obs - (y_pred + H @ dx)
-        
-        # Covartiance Update (Joseph Form)
-        IKH = I - K @ H
-        P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
-
-        # --- Store all results ---
-        dx_hist.append(dx.copy())
-        P_hist.append(P.copy())
-        corrected_state_hist.append(x_ref + dx)
-        innovations.append(prefit_residual)
-        postfit_residuals.append(postfit_residual) # Store for returning
-        S_hist.append(S.copy())
-
-        Phi_prev = Phi_global
-
-    return (np.array(dx_hist), 
-            np.array(P_hist), 
-            np.array(corrected_state_hist), 
-            np.array(innovations), 
-            np.array(postfit_residuals),
-            np.array(S_hist))
+from utils.filters.lkf_class import LKF
 
 # ============================================================
 # Main Execution
@@ -100,19 +24,13 @@ r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
 state0 = np.concatenate([r0, v0, Phi0])
 
-# Ground Stations (lat, lon) [rad]
-stations_ll = np.deg2rad([
-    [-35.398333, 148.981944], # Station 1 (Canberra, Australia)
-    [ 40.427222, 355.749444], # Station 2 (Fort Davis, USA)
-    [ 35.247164, 243.205000]  # Station 3 (Madrid, Spain)
-])
 
+# Load Measurements
 df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
 time_eval = df_meas['Time(s)'].values
 
 # ODE arguments
 coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
-
 
 # Doing a nonlinear integration to get the reference trajectory (kinda cheating here)
 print("Integrating 6x6 Reference Trajectory...")
@@ -121,16 +39,16 @@ sol = solve_ivp(
     (0, time_eval[-1]), 
     state0, 
     t_eval=time_eval, 
-    args=(coeffs,),  # This passes the coeffs to the ODE function
-    rtol=1e-12, 
-    atol=1e-12
+    args=(coeffs,),
+    rtol=1e-10, 
+    atol=1e-10
 )
 # # Debug: Save the state solution to a csv for verification
 # np.savetxt('HW_2/lkf_reference_trajectory.csv', 
 #            np.column_stack((sol.t, sol.y.T[:, :6])), delimiter=',')
 
 # Initial State Deviation & Covariances
-dx_0 = np.array([0, 0, 0, 0, 0, 0])
+dx_0 = np.array([0.5, 0, 0, 0.5e-3, 0, 0])
 P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])
 Rk = np.diag([1e-6, 1e-12])
 
@@ -138,7 +56,17 @@ Rk = np.diag([1e-6, 1e-12])
 # Q = np.diag([1e-10, 1e-10, 1e-10, 1e-8, 1e-8, 1e-8])
 Q = np.diag([0, 0, 0, 0, 0, 0])  # No process noise
 
-x_hist, P_hist, x_corrected, innovations, postfit_residuals, S_hist = run_lkf(sol, df_meas, dx_0, P0, Rk, Q)
+lkf_filter = LKF(n_states=6)
+
+results = lkf_filter.run(sol, df_meas, dx_0, P0, Rk, Q)
+
+# --- Unpack results ---
+dx_hist = np.array(results.dx_hist)
+corrected_state_hist = np.array(results.corrected_state_hist)
+P_hist = np.array(results.P_hist)
+innovations = np.array(results.innovations)
+postfit_residuals = np.array(results.postfit_residuals)
+S_hist = np.array(results.S_hist)
 
 # ============================================================
 # Plotting (State Deviations)
@@ -152,7 +80,7 @@ axes = axes.flatten()
 
 for i in range(6):
     # Remove the [1:, i] and use [:, i] to match the full length of 'times'
-    axes[i].scatter(times, x_hist[:, i], c='b', label='Estimate', s=2)
+    axes[i].scatter(times, dx_hist[:, i], c='b', label='Estimate', s=2)
     axes[i].plot(times, 3*sigmas[:, i], 'r--', alpha=0.7, label=fr'3$\sigma$')
     axes[i].plot(times, -3*sigmas[:, i], 'r--', alpha=0.7)
     

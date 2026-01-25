@@ -5,17 +5,106 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 
+
 # ============================================================
 # Imports & Constants
 # ============================================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Local Imports
+# Note: Ensure these paths and constants match your local environment
 from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
-from resources.constants import MU_EARTH, J2
-from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-from utils.ground_station_utils.gs_latlon import get_gs_eci_state
-from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix
+from resources.constants import MU_EARTH, J2, J3, R_EARTH
+
+# Ground Stations (lat, lon) [rad]
+stations_ll = np.deg2rad([
+    [-35.398333, 148.981944], # Station 1 (Canberra, Australia)
+    [ 40.427222, 355.749444], # Station 2 (Fort Davis, USA)
+    [ 35.247164, 243.205000]  # Station 3 (Madrid, Spain)
+])
+
+# ============================================================
+# Dynamics & Jacobian (Strictly 6x6)
+# ============================================================
+def get_zonal_jacobian(r_vec, params):
+    mu, j2_val, _ = params  # J3 not used in this specific G matrix for simplicity
+    x, y, z = r_vec
+    r2 = np.dot(r_vec, r_vec)
+    r = np.sqrt(r2)
+    r3, r5, r7 = r**3, r**5, r**7
+
+    # Point-mass gravity gradient
+    G = -(mu / r3) * np.eye(3) + (3 * mu / r5) * np.outer(r_vec, r_vec)
+
+    # J2 Contribution to Gravity Gradient
+    if j2_val != 0.0:
+        j2c = -1.5 * mu * j2_val * R_EARTH**2
+        G_j2 = j2c * np.array([
+            [1/r5 - 5*(x*x+z*z)/r7, -5*x*y/r7,           -15*x*z/r7],
+            [-5*x*y/r7,           1/r5 - 5*(y*y+z*z)/r7, -15*y*z/r7],
+            [-15*x*z/r7,          -15*y*z/r7,            3/r5 - 30*z*z/r7]
+        ])
+        G += G_j2
+
+    # Assemble 6x6 A matrix
+    A = np.zeros((6, 6))
+    A[0:3, 3:6] = np.eye(3)
+    A[3:6, 0:3] = G
+    return A
+
+def zonal_sph_ode(t, state):
+    r = state[0:3]
+    v = state[3:6]
+    Phi = state[6:].reshape(6, 6)
+    
+    rnorm = np.linalg.norm(r)
+    
+    # Acceleration (Point Mass + J2)
+    a_pm = -(MU_EARTH / rnorm**3) * r
+    factor_j2 = 1.5 * J2 * MU_EARTH * (R_EARTH**2 / rnorm**5)
+    a_j2 = factor_j2 * np.array([
+        r[0]*(5*(r[2]/rnorm)**2 - 1),
+        r[1]*(5*(r[2]/rnorm)**2 - 1),
+        r[2]*(5*(r[2]/rnorm)**2 - 3)
+    ])
+    a = a_pm + a_j2
+
+    # STM Dynamics (6x6)
+    A = get_zonal_jacobian(r, [MU_EARTH, J2, J3])
+    Phi_dot = A @ Phi
+
+    return np.concatenate([v, a, Phi_dot.flatten()])
+
+# ============================================================
+# Measurement & Station Models
+# ============================================================
+def get_gs_eci_state(lat, lon, time, init_theta=122):
+    omega_earth = 7.2921159e-5  
+    theta_total = np.deg2rad(init_theta) + (omega_earth * time) + lon
+    cos_lat = np.cos(lat)
+    
+    Rs = np.array([
+        R_EARTH * cos_lat * np.cos(theta_total),
+        R_EARTH * cos_lat * np.sin(theta_total),
+        R_EARTH * np.sin(lat)
+    ])
+    Vs = np.array([-omega_earth * Rs[1], omega_earth * Rs[0], 0.0])
+    return Rs, Vs
+
+def compute_H_matrix(R, V, Rs, Vs):
+    rho_vec = R - Rs
+    v_rel = V - Vs
+    rho = np.linalg.norm(rho_vec)
+    rho_dot = np.dot(rho_vec, v_rel) / rho
+
+    d_rho_dR = rho_vec / rho
+    d_rhodot_dR = (v_rel - (rho_dot * d_rho_dR)) / rho
+    d_rhodot_dV = d_rho_dR
+
+    H = np.zeros((2, 6))
+    H[0, 0:3] = d_rho_dR
+    H[1, 0:3] = d_rhodot_dR
+    H[1, 3:6] = d_rhodot_dV
+    return np.array([rho, rho_dot]), H
 
 # ============================================================
 # Linearized Kalman Filter
@@ -31,8 +120,7 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk,Q):
     P_hist = []
     corrected_state_hist = []
     innovations = []
-    postfit_residuals = []
-    S_hist = [] 
+    prefit_residuals = [] 
     
     Phi_prev = np.eye(n)
 
@@ -51,25 +139,21 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk,Q):
         station_idx = int(meas_row['Station_ID']) - 1
         Rs, Vs = get_gs_eci_state(stations_ll[station_idx][0], 
                                  stations_ll[station_idx][1], 
-                                 sol.t[k], init_theta=np.deg2rad(122))
+                                 sol.t[k])
         
         x_ref = sol.y[0:6, k]
         y_pred, H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
         y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
 
-        # Residuals
-        y_pred_total = y_pred + H @ dx_pred
-
         # Measurement Update
-        prefit_residual = y_obs - y_pred_total
+        prefit_residual = y_obs - y_pred
+        innovation = prefit_residual - H @ dx_pred # The "post-prediction" residual
 
-        # Kalman Gain & Update
+        # 4. Kalman Gain & Update
         S = H @ P_pred @ H.T + Rk
         K = P_pred @ H.T @ np.linalg.inv(S)
         
-        # Update state deviation and covariance
-        dx = dx_pred + K @ prefit_residual
-        postfit_residual = y_obs - (y_pred + H @ dx)
+        dx = dx_pred + K @ innovation
         
         # Covartiance Update (Joseph Form)
         IKH = I - K @ H
@@ -80,8 +164,7 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk,Q):
         P_hist.append(P.copy())
         corrected_state_hist.append(x_ref + dx)
         innovations.append(prefit_residual)
-        postfit_residuals.append(postfit_residual) # Store for returning
-        S_hist.append(S.copy())
+        prefit_residuals.append(innovation) # Store for returning
 
         Phi_prev = Phi_global
 
@@ -89,8 +172,7 @@ def run_lkf(sol, meas_df, dx_0, P0, Rk,Q):
             np.array(P_hist), 
             np.array(corrected_state_hist), 
             np.array(innovations), 
-            np.array(postfit_residuals),
-            np.array(S_hist))
+            np.array(prefit_residuals))
 
 # ============================================================
 # Main Execution
@@ -100,34 +182,12 @@ r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
 state0 = np.concatenate([r0, v0, Phi0])
 
-# Ground Stations (lat, lon) [rad]
-stations_ll = np.deg2rad([
-    [-35.398333, 148.981944], # Station 1 (Canberra, Australia)
-    [ 40.427222, 355.749444], # Station 2 (Fort Davis, USA)
-    [ 35.247164, 243.205000]  # Station 3 (Madrid, Spain)
-])
-
 df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
 time_eval = df_meas['Time(s)'].values
 
-# ODE arguments
-coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
-
-
 # Doing a nonlinear integration to get the reference trajectory (kinda cheating here)
 print("Integrating 6x6 Reference Trajectory...")
-sol = solve_ivp(
-    zonal_sph_ode_6x6, 
-    (0, time_eval[-1]), 
-    state0, 
-    t_eval=time_eval, 
-    args=(coeffs,),  # This passes the coeffs to the ODE function
-    rtol=1e-12, 
-    atol=1e-12
-)
-# # Debug: Save the state solution to a csv for verification
-# np.savetxt('HW_2/lkf_reference_trajectory.csv', 
-#            np.column_stack((sol.t, sol.y.T[:, :6])), delimiter=',')
+sol = solve_ivp(zonal_sph_ode, (0, time_eval[-1]), state0, t_eval=time_eval, rtol=1e-12, atol=1e-12)
 
 # Initial State Deviation & Covariances
 dx_0 = np.array([0, 0, 0, 0, 0, 0])
@@ -138,7 +198,34 @@ Rk = np.diag([1e-6, 1e-12])
 # Q = np.diag([1e-10, 1e-10, 1e-10, 1e-8, 1e-8, 1e-8])
 Q = np.diag([0, 0, 0, 0, 0, 0])  # No process noise
 
-x_hist, P_hist, x_corrected, innovations, postfit_residuals, S_hist = run_lkf(sol, df_meas, dx_0, P0, Rk, Q)
+x_hist, P_hist, x_corrected, innovations, prefit_residuals = run_lkf(sol, df_meas, dx_0, P0, Rk, Q)
+
+
+# ============================================================
+# Requirement i: State Error vs. Truth Analysis
+# ============================================================
+# 1. Convert your LKF results into a DataFrame
+lkf_results = pd.DataFrame(x_corrected, columns=['x_est', 'y_est', 'z_est', 'vx_est', 'vy_est', 'vz_est'])
+lkf_results['Time(s)'] = sol.t
+
+# 2. Merge with the Truth file on Time
+# Rounding time to 4 decimal places ensures the match works
+lkf_results['Time_Match'] = lkf_results['Time(s)'].round(4)
+truth_states['Time_Match'] = truth_states['Time(s)'].round(4)
+
+comparison = pd.merge(lkf_results, truth_states, on='Time_Match', suffixes=('', '_truth'))
+
+# 3. Calculate TRUE Errors
+# Error = Estimate - Truth
+state_errors = np.zeros((len(comparison), 6))
+state_cols = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+
+for i, col in enumerate(state_cols):
+    truth_col = f'{col}(km)' if i < 3 else f'{col}(km/s)'
+    state_errors[:, i] = comparison[f'{col}_est'] - comparison[truth_col]
+
+# 4. Now plot state_errors[:, i] vs comparison['Time(s)']
+# This fulfills Requirement (i) using the simulated truth data.
 
 # ============================================================
 # Plotting (State Deviations)
@@ -180,21 +267,21 @@ for k in range(len(sol.t)):
     res_sigmas.append(np.sqrt(np.diag(Rk))) 
 
 res_sigmas = np.array(res_sigmas)
-postfit_residuals = np.array(postfit_residuals)
+prefit_residuals = np.array(prefit_residuals)
 
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
 
 # --- Range Residuals ---
-ax1.scatter(times, postfit_residuals[:, 0], s=2, c='black', label='Post-fit Residual')
+ax1.scatter(times, prefit_residuals[:, 0], s=2, c='black', label='Pre-fit Residual')
 ax1.plot(times, 3*res_sigmas[:, 0], 'r--', alpha=0.8, label=fr'3$\sigma$ Threshold')
 ax1.plot(times, -3*res_sigmas[:, 0], 'r--', alpha=0.8)
 ax1.set_ylabel('Range Residual (km)')
-ax1.set_title('Post-fit Residuals for Range and Range-Rate Measurements')
+ax1.set_title('Measurement Residuals (Innovation Checks)')
 ax1.grid(True, alpha=0.3)
 ax1.legend(loc='upper right')
 
 # --- Range-Rate Residuals ---
-ax2.scatter(times, postfit_residuals[:, 1], s=2, c='black')
+ax2.scatter(times, prefit_residuals[:, 1], s=2, c='black')
 ax2.plot(times, 3*res_sigmas[:, 1], 'r--', alpha=0.8)
 ax2.plot(times, -3*res_sigmas[:, 1], 'r--', alpha=0.8)
 ax2.set_ylabel('Range-Rate Residual (km/s)')
@@ -205,8 +292,8 @@ plt.tight_layout()
 plt.show()
 
 # --- Print Filter Statistics ---
-rms_range = np.sqrt(np.mean(postfit_residuals[:, 0]**2))
-rms_range_rate = np.sqrt(np.mean(postfit_residuals[:, 1]**2))
+rms_range = np.sqrt(np.mean(prefit_residuals[:, 0]**2))
+rms_range_rate = np.sqrt(np.mean(prefit_residuals[:, 1]**2))
 print(f"--- Filter Performance Metrics ---")
 print(f"RMS Range Residual:      {rms_range:.6e} km")
 print(f"RMS Range-Rate Residual: {rms_range_rate:.6e} km/s")
@@ -217,7 +304,7 @@ print(f"RMS Range-Rate Residual: {rms_range_rate:.6e} km/s")
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
 # --- Range Residual Histogram ---
-range_res = postfit_residuals[:, 0]
+range_res = prefit_residuals[:, 0]
 mu_r, std_r = np.mean(range_res), np.std(range_res)
 
 # Set a filter for outliers beyond 6 sigma
@@ -237,7 +324,7 @@ ax1.legend()
 ax1.grid(alpha=0.3)
 
 # --- Range-Rate Residual Histogram ---
-rr_res = postfit_residuals[:, 1]
+rr_res = prefit_residuals[:, 1]
 mu_rr, std_rr = np.mean(rr_res), np.std(rr_res)
 
 # Set a filter for outliers beyond 6 sigma
@@ -259,37 +346,3 @@ ax2.grid(alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# ============================================================
-# Plot of innovations over time
-# ============================================================
-# Get the innovations and S from your filter run
-# Assuming: innovations.shape = (N, 2), S_hist.shape = (N, 2, 2)
-# Convert lists to numpy arrays if they aren't already
-innov_arr = np.array(innovations)
-S_arr = np.array(S_hist)
-
-# Calculate 3-sigma bounds from S
-# S[k, 0, 0] is the variance for Range, S[k, 1, 1] for Range-Rate
-sigma_innov = np.sqrt(np.array([np.diag(S_k) for S_k in S_arr]))
-
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-
-# --- Range Innovations ---
-ax1.scatter(times, innov_arr[:, 0], s=3, c='blue', label='Range Innovation (Pre-fit Residuals)')
-# ax1.plot(times, 3*sigma_innov[:, 0], 'r--', alpha=0.8, label=r'$\pm3\sigma$ Bounds')
-# ax1.plot(times, -3*sigma_innov[:, 0], 'r--', alpha=0.8)
-ax1.set_ylabel('Range Error (km)')
-ax1.set_title('Innovations (Pre-fit Residuals) vs. Time')
-ax1.grid(True, alpha=0.3)
-ax1.legend(loc='upper right')
-
-# --- Range-Rate Innovations ---
-ax2.scatter(times, innov_arr[:, 1], s=3, c='green', label='Range-Rate Innovation (Pre-fit Residuals)')
-# ax2.plot(times, 3*sigma_innov[:, 1], 'r--', alpha=0.8)
-# ax2.plot(times, -3*sigma_innov[:, 1], 'r--', alpha=0.8)
-ax2.set_ylabel('Range-Rate Error (km/s)')
-ax2.set_xlabel('Time (s)')
-ax2.grid(True, alpha=0.3)
-
-plt.tight_layout()
-plt.show()

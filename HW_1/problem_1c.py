@@ -1,6 +1,6 @@
 import numpy as np
 
-def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
+def get_zonal_jacobian(r_vec, v_vec, coeffs, Re=6378.0):
     """
     Computes the 9x9 Jacobian (A-matrix) using analytic formulas.
     State: [x, y, z, vx, vy, vz, mu, J2, J3]
@@ -12,8 +12,8 @@ def get_zonal_jacobian(r_vec, v_vec, mu, coeffs, Re=6378.0):
     # Precompute powers of r for speed
     r3, r5, r7, r9, r11 = r**3, r**5, r**7, r**9, r**11
     
-    # Extract coefficients (Assuming coeffs = [J1, J2, J3])
-    J2, J3 = coeffs[1], coeffs[2]
+    # Extract coefficients (Assuming coeffs = [mu, J2, J3])
+    mu, J2, J3 = coeffs[0], coeffs[1], coeffs[2]
     
     # --- 1. Gravity Gradient (G = del_a / del_r) ---
     # Point Mass
@@ -72,7 +72,7 @@ state_test = np.array([-0.64901376519124, 1.18116604196553, -0.75845329728369,
                        -0.55868076447397, 0.17838022584977, -0.19686144647594])
 
 A_res = get_zonal_jacobian(state_test[0:3], state_test[3:6], 
-                           state_test[6], [0, state_test[7], state_test[8]])
+                           state_test[6:9])
 
 
 # Print max error
