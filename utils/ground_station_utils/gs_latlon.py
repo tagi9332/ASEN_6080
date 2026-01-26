@@ -1,5 +1,5 @@
 import numpy as np
-from resources.constants import R_EARTH, OMEGA_EARTH
+from resources.constants import R_EARTH
 
 
 def get_gs_eci_state(lat, lon, time, init_theta=0):
@@ -11,6 +11,8 @@ def get_gs_eci_state(lat, lon, time, init_theta=0):
     :param time: Time in seconds
     :param init_theta: Initial Earth rotation angle in radians
     """
+
+    OMEGA_EARTH = 2 * np.pi / 86400  # rad/s
       
     theta_total = init_theta + (OMEGA_EARTH * time) + lon
     cos_lat = np.cos(lat)

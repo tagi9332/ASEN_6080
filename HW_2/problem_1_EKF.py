@@ -22,10 +22,16 @@ from utils.filters.lkf_class import LKF
 # ============================================================
 # Main Execution
 # ============================================================
+# Initial State Deviation & Covariances
+x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])
+Rk = np.diag([1e-6, 1e-12])
+Q = np.zeros((6, 6))
+
 # Initial Reference State
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
-state0 = np.concatenate([r0, v0, Phi0])
+state0 = np.concatenate([r0+x_0[:3], v0+x_0[3:], Phi0])
 
 # Load Measurements
 df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
@@ -44,19 +50,13 @@ sol = solve_ivp(
     args=(coeffs,),
     rtol=1e-10, atol=1e-10)
 
-# Initial State Deviation & Covariances
-# dx_0 = np.array([0, 0, 0, 0, 0, 0])
-dx_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
-P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])
-Rk = np.diag([1e-6, 1e-12])
-Q = np.zeros((6, 6))
 
 EKF_filter = EKF(n_states=6)
 print("Running EKF Filter...")
 ekf_results = EKF_filter.run(
     sol_ref=sol, 
     meas_df=df_meas, 
-    dx_0=dx_0, 
+    x_0=x_0, 
     P0=P0, 
     Rk=Rk, 
     Q=Q,

@@ -1,6 +1,8 @@
 # PROTOS/data/resources/constants.py
 # ASEN 6080 provided values
 
+import numpy as np
+
 # Gravitational parameters [km^3/s^2]
 MU_EARTH = 398600.4415
 
@@ -12,6 +14,6 @@ J2 = 1.082626982e-3
 J3 = -2.5324105e-6
 
 # Earth rotation rate [rad/s]
-OMEGA_EARTH = 7.2921158553e-5
+OMEGA_EARTH = 2 * np.pi / 86400
 
 

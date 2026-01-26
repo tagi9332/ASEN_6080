@@ -2,12 +2,16 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from dataclasses import dataclass
 from typing import Any
+import os, sys
+
+# set the path to import from parent directory
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Local Imports
 from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
 from utils.ground_station_utils.gs_latlon import get_gs_eci_state
-from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix
+from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 from resources.gs_locations_latlon import stations_ll
 
 
@@ -36,14 +40,14 @@ class EKF:
         self.n = n_states
         self.I = np.eye(n_states)
 
-    def run(self, sol_ref, meas_df, dx_0, P0, Rk, Q, switch_idx=100) -> EKFResults:
+    def run(self, sol_ref, meas_df, x_0, P0, Rk, Q, switch_idx=100) -> EKFResults:
             # Initial Filter State
-            dx = dx_0.copy()       # Deviation for LKF phase
+            x = x_0.copy()       # Deviation for LKF phase
             P = P0.copy()          # Covariance
-            current_state = (sol_ref.y[0:6, 0] + dx_0).copy()   # Total state for EKF phase
+            current_state = (sol_ref.y[0:6, 0] + x_0).copy()   # Total state for EKF phase
             
             # Storage
-            _dx_plot, _P, _states, _innov, _post, _S = [], [], [], [], [], []
+            _x, _P, _states, _innov, _post, _S = [], [], [], [], [], []
             
             Phi_prev = self.I.copy()
 
@@ -70,23 +74,24 @@ class EKF:
                     Phi_incr = Phi_global @ np.linalg.inv(Phi_prev)
                     x_ref = sol_ref.y[0:6, k]
                     
-                    dx_pred = Phi_incr @ dx
+                    dx_pred = Phi_incr @ x
                     P_pred = Phi_incr @ P @ Phi_incr.T + (Q * dt)
                     
                     # Observation (Linearized around reference)
-                    y_nom, H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
+                    H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
+                    y_nom = compute_rho_rhodot(x_ref, np.concatenate([Rs, Vs]))
                     innovation = y_obs - (y_nom + H @ dx_pred)
                     
                     # Update
                     S = H @ P_pred @ H.T + Rk
                     K = P_pred @ H.T @ np.linalg.inv(S)
                     
-                    dx = dx_pred + K @ innovation
+                    x = dx_pred + K @ innovation
                     IKH = self.I - K @ H
                     P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
                     
-                    current_state = x_ref + dx
-                    y_post = y_obs - (y_nom + H @ dx)
+                    current_state = x_ref + x
+                    y_post = y_obs - (y_nom + H @ x)
                     
                     Phi_prev = Phi_global # Update for next LKF step
 
@@ -123,11 +128,11 @@ class EKF:
                     y_post = y_obs - compute_H_matrix(current_state[0:3], current_state[3:6], Rs, Vs)[0]
 
                 # Store results
-                _dx_plot.append(current_state - sol_ref.y[0:6, k])
+                _x.append(current_state - sol_ref.y[0:6, k])
                 _P.append(P.copy())
                 _states.append(current_state.copy())
                 _innov.append(innovation.copy())
                 _post.append(y_post.copy())
                 _S.append(S.copy())
 
-            return EKFResults(_dx_plot, _P, _states, _innov, _post, _S)
+            return EKFResults(_x, _P, _states, _innov, _post, _S)

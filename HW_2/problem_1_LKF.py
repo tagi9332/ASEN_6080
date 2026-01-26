@@ -19,10 +19,17 @@ from utils.filters.lkf_class import LKF
 # ============================================================
 # Main Execution
 # ============================================================
-# Initial Reference State
+# Initial State Deviation & Covariances
+x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
+P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
+Rk = np.diag([1e-6, 1e-12])
+
+# Initial Truth State (without deviation)
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
-state0 = np.concatenate([r0, v0, Phi0])
+
+# Propagate the reference trajectory (truth plus deviation)
+state0 = np.concatenate([r0+x_0[:3], v0+x_0[3:], Phi0])
 
 
 # Load Measurements
@@ -47,18 +54,13 @@ sol = solve_ivp(
 # np.savetxt('HW_2/lkf_reference_trajectory.csv', 
 #            np.column_stack((sol.t, sol.y.T[:, :6])), delimiter=',')
 
-# Initial State Deviation & Covariances
-dx_0 = np.array([0.5, 0, 0, 0.5e-3, 0, 0])
-P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])
-Rk = np.diag([1e-6, 1e-12])
-
 # Process noise
 # Q = np.diag([1e-10, 1e-10, 1e-10, 1e-8, 1e-8, 1e-8])
 Q = np.diag([0, 0, 0, 0, 0, 0])  # No process noise
 
 lkf_filter = LKF(n_states=6)
 
-results = lkf_filter.run(sol, df_meas, dx_0, P0, Rk, Q)
+results = lkf_filter.run(sol, df_meas, x_0, P0, Rk, Q)
 
 # --- Unpack results ---
 dx_hist = np.array(results.dx_hist)

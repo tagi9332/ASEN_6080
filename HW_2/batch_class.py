@@ -7,7 +7,6 @@ import scipy.stats as stats
 from dataclasses import dataclass
 from typing import Any
 
-
 # ============================================================
 # Imports & Constants
 # ============================================================
@@ -18,7 +17,7 @@ from utils.orbital_element_conversions.oe_conversions import orbital_elements_to
 from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
 from utils.ground_station_utils.gs_latlon import get_gs_eci_state
-from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix
+from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 
 @dataclass
 class IterativeBatchResults:
@@ -83,11 +82,11 @@ class IterativeBatch:
                 )
                 
                 x_ref = sol.y[0:6, k]
-                y_ref, H_tilde = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
+                y_ref = compute_rho_rhodot(x_ref, np.concatenate([Rs, Vs]))
                 y_obs = np.array([row['Range(km)'], row['Range_Rate(km/s)']])
                 
                 # Map H to epoch: H_epoch = H_tk * Phi(tk, t0)
-                H = H_tilde @ Phi_tk_t0
+                H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs) @ Phi_tk_t0
                 residual = y_obs - y_ref
                 
                 info_matrix += H.T @ inv_Rk @ H
@@ -139,13 +138,16 @@ class IterativeBatch:
                 sol.t[k], init_theta=np.deg2rad(122)
             )
             
-            y_ref, H_tilde = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
+            # Compute H for the reference (if needed for stats) and z_hat for residuals
             y_obs = np.array([row['Range(km)'], row['Range_Rate(km/s)']])
 
-            z_hat_post, _ = compute_H_matrix(
-                    x_corrected_k[0:3], x_corrected_k[3:6], Rs, Vs
-                )
+            # Use compute_rho_rhodot to get the predicted measurement (y)
+            # This returns exactly [range, range_rate] which is shape (2,)
+            X_station = np.concatenate([Rs, Vs])
+            z_hat_post = compute_rho_rhodot(x_corrected_k, X_station)
 
+            # Now the subtraction works perfectly (2,) - (2,)
+            postfit_res = y_obs - z_hat_post
             
             # Post-fit residual: observation minus corrected reference
             postfit_res = y_obs - z_hat_post
@@ -174,7 +176,7 @@ stations_ll = np.deg2rad([
 ])
 
 # Load Measurements
-df_meas = pd.read_csv(r'HW_2\measurements_noisy_2.csv')
+df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
 
 # Initial Covariances & Weights
 # P0: Confidence in your initial r0, v0 guess

@@ -14,8 +14,7 @@ def range_obs_partials(R, V, Rs, Vs):
     # Relative position and velocity
     rho_vec = R - Rs
     v_rel = V - Vs
-    
-    
+        
     # Range and range rate
     rho = np.linalg.norm(rho_vec)
     rho_dot = np.dot(rho_vec, v_rel) / rho
