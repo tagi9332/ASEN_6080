@@ -149,9 +149,6 @@ class IterativeBatch:
             # Now the subtraction works perfectly (2,) - (2,)
             postfit_res = y_obs - z_hat_post
             
-            # Post-fit residual: observation minus corrected reference
-            postfit_res = y_obs - z_hat_post
-            
             _dx_hist.append(dx_k)
             _P_hist.append(P_k)
             _states.append(x_ref + dx_k)
@@ -232,8 +229,8 @@ plt.show()
 # ============================================================
 # Residual Plotting & Gaussian Distribution Analysis
 # ============================================================
-postfit_residuals = np.array(postfit_residuals)
-res_sigmas = np.sqrt(np.diag(Rk))
+postfit_residuals = np.array(postfit_residuals)*1e3
+res_sigmas = np.sqrt(np.diag(Rk)) * 1000  # Convert to meters and m/s
 
 fig = plt.figure(figsize=(14, 10))
 gs = fig.add_gridspec(2, 2, width_ratios=[2, 1])
@@ -243,7 +240,7 @@ ax1 = fig.add_subplot(gs[0, 0])
 ax1.scatter(np.array(times), np.array(postfit_residuals[:, 0], dtype=float), s=2, c='black', label='Post-fit Residual')
 ax1.axhline(2*res_sigmas[0], color='r', linestyle='--', alpha=0.8, label=r'2$\sigma$ Noise Floor')
 ax1.axhline(-2*res_sigmas[0], color='r', linestyle='--', alpha=0.8)
-ax1.set_ylabel('Range Residual (km)')
+ax1.set_ylabel('Range Residual (m)')
 ax1.set_title('Post-fit Measurement Residuals')
 ax1.grid(True, alpha=0.3)
 ax1.legend(loc='upper right')
@@ -263,7 +260,7 @@ ax3 = fig.add_subplot(gs[1, 0])
 ax3.scatter(np.array(times), np.array(postfit_residuals[:, 1], dtype=float), s=2, c='black')
 ax3.axhline(2*res_sigmas[1], color='r', linestyle='--', alpha=0.8)
 ax3.axhline(-2*res_sigmas[1], color='r', linestyle='--', alpha=0.8)
-ax3.set_ylabel('Range-Rate Residual (km/s)')
+ax3.set_ylabel('Range-Rate Residual (m/s)')
 ax3.set_xlabel('Time (s)')
 ax3.grid(True, alpha=0.3)
 
@@ -283,5 +280,5 @@ plt.show()
 
 # --- Print Final Statistics ---
 print(f"\n--- Final Batch Statistics ---")
-print(f"RMS Range Residual:     {np.sqrt(np.mean(r_res**2)):.6e} km")
-print(f"RMS Range-Rate Residual: {np.sqrt(np.mean(rr_res**2)):.6e} km/s")
+print(f"RMS Range Residual:     {np.sqrt(np.mean(r_res**2)):.6e} m")
+print(f"RMS Range-Rate Residual: {np.sqrt(np.mean(rr_res**2)):.6e} m/s")
