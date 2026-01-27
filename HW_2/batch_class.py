@@ -32,129 +32,212 @@ class IterativeBatchResults:
         self.corrected_state_hist = np.array(self.corrected_state_hist)
         self.postfit_residuals = np.array(self.postfit_residuals)
 
-class IterativeBatch:
-    def __init__(self, n_states: int = 6):
-        self.n = n_states
-        self.I = np.eye(n_states)
+import numpy as np
+from scipy.integrate import solve_ivp
 
-    def run(self, state0_initial, df_meas, P0_prior, Rk, stations_ll, max_iterations=10, tolerance=1e-10) -> IterativeBatchResults:
-        """
-        Performs Differential Correction (Iterative Least Squares) to estimate 
-        the initial state at epoch (t0).
-        """
-        # Initialize the state at t0 to be corrected
-        curr_x0 = state0_initial[:6].copy()
+import numpy as np
+import pandas as pd
+from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+from dataclasses import dataclass
+from typing import Any
+
+# Assuming these imports exist in your environment
+# from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
+# from resources.constants import MU_EARTH, J2, R_EARTH
+# from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
+# from utils.ground_station_utils.gs_latlon import get_gs_eci_state
+# from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
+
+
+
+
+def H_range_rangerate(R, V, Rs, Vs, eps=1e-12):
+    """
+    Measurement partials for simplified range and range-rate:
+        rho  = ||R - Rs||
+        rhod = (R - Rs)·(V - Vs) / rho
+
+    Inputs:  R,V,Rs,Vs are length-3 arrays (or 3x1 vectors)
+    Output:  H is 2x6 Jacobian wrt X = [R; V]
+             rows: [rho, rhod], cols: [R (3), V (3)]
+    """
+    R  = np.asarray(R,  dtype=float).reshape(3,)
+    V  = np.asarray(V,  dtype=float).reshape(3,)
+    Rs = np.asarray(Rs, dtype=float).reshape(3,)
+    Vs = np.asarray(Vs, dtype=float).reshape(3,)
+
+    r = R - Rs
+    v = V - Vs
+
+    rho = np.linalg.norm(r)
+    rho_hat = r / rho    
+    rhod = np.dot(r, v) / rho
+
+    # Partials
+    drho_dR = rho_hat.reshape(1, 3)      # 1x3
+    drho_dV = np.zeros((1, 3))           # 1x3
+
+    # d(rhod)/dR
+    drhod_dR = (v / rho - (np.dot(r, v) / rho**3) * r).reshape(1, 3)
+
+    # d(rhod)/dV
+    drhod_dV = rho_hat.reshape(1, 3)
+
+    H = np.block([
+        [drho_dR,  drho_dV],
+        [drhod_dR, drhod_dV]])  # 2x6
+
+    return H
+
+@dataclass
+class IterativeBatchResults:
+    dx_hist: Any
+    P_hist: Any
+    corrected_state_hist: Any
+    postfit_residuals: Any
+
+    def __post_init__(self):
+        self.dx_hist = np.array(self.dx_hist)
+        self.P_hist = np.array(self.P_hist)
+        self.corrected_state_hist = np.array(self.corrected_state_hist)
+        self.postfit_residuals = np.array(self.postfit_residuals)
+
+class IterativeBatch:
+    def __init__(self, n_states=6):
+        self.n = n_states
+
+    def run(self, state0_initial, df_meas, P0_prior, Rk, stations_ll, max_iterations=10, tolerance=1e-10):
         inv_Rk = np.linalg.inv(Rk)
         inv_P0 = np.linalg.inv(P0_prior)
         
-        # Initialize variables to store final results
-        dx0 = np.zeros(self.n) 
-        final_sol = None
-        final_P0 = np.linalg.inv(P0_prior)
+        # Set x0_bar to be the true initial state plus deviation
+        x0_bar = state0_initial[:self.n].copy()
+        x0_star = x0_bar.copy()
+        t_meas = df_meas['Time(s)'].values
+
+        # 1. Generate the Baseline (Initial Guess Trajectory)
+        # We append an identity STM because zonal_sph_ode_6x6 requires 42 elements to reshape
+        phi0_flat = np.eye(self.n).flatten()
+        state_baseline = np.concatenate([x0_bar, phi0_flat])
+
+        print("Propagating initial guess baseline...")
+        initial_sol = solve_ivp(
+            zonal_sph_ode_6x6, 
+            (0, t_meas[-1]), 
+            state_baseline, 
+            t_eval=t_meas, 
+            args=([MU_EARTH, J2, 0],), 
+            rtol=1e-10, atol=1e-10,
+            method="DOP853"
+        )
+        # We only need the r and v components (first 6) for the baseline comparison
+        initial_guess_trajectory = initial_sol.y[:6, :].T 
         
+        # Track these for the final output
+        final_P0 = P0_prior
+        sol = None
+
+        # 2. Iterative Batch Loop (Differential Correction)
         for i in range(max_iterations):
             print(f"--- Iteration {i+1} ---")
+            phi0 = np.eye(self.n).flatten()
+            state_to_integrate = np.concatenate([x0_star, phi0])
             
-            # Reset STM for the new reference trajectory
-            phi0 = self.I.flatten()
-            state_to_integrate = np.concatenate([curr_x0, phi0])
-            
-            # 1. Integrate the NEW reference trajectory starting from curr_x0
+            # Integrate current nominal trajectory and STM
             sol = solve_ivp(
-                zonal_sph_ode_6x6, (0, df_meas['Time(s)'].values[-1]), 
-                state_to_integrate, t_eval=df_meas['Time(s)'].values, 
-                args=([MU_EARTH, J2, 0],), rtol=1e-10, atol=1e-10
+                zonal_sph_ode_6x6, 
+                (0, t_meas[-1]), 
+                state_to_integrate, 
+                t_eval=t_meas, 
+                args=([MU_EARTH,J2,0],), 
+                rtol=1e-10, atol=1e-10,
+                method="DOP853"
             )
+
+            # Reset Normal Equations (Information Form)
+            # Lambda = P0^-1 + sum(H^T R^-1 H)
+            # N = P0^-1 * (x0_bar - x0_star) + sum(H^T R^-1 y_i)
+            Lambda = inv_P0.copy()
+            N = inv_P0 @ (x0_bar - x0_star)
             
-            # 2. Accumulate Normal Equations
-            info_matrix = inv_P0.copy()
-            normal_vector = np.zeros(self.n) 
-            
+            # Accumulate measurements
             for k in range(len(sol.t)):
                 Phi_tk_t0 = sol.y[6:, k].reshape(self.n, self.n)
+                x_ref = sol.y[0:6, k]
                 
                 row = df_meas.iloc[k]
                 station_idx = int(row['Station_ID']) - 1
                 Rs, Vs = get_gs_eci_state(
                     stations_ll[station_idx][0], 
                     stations_ll[station_idx][1], 
-                    sol.t[k], init_theta=np.deg2rad(122)
+                    sol.t[k], 
+                    init_theta=np.deg2rad(122)
                 )
                 
-                x_ref = sol.y[0:6, k]
                 y_ref = compute_rho_rhodot(x_ref, np.concatenate([Rs, Vs]))
                 y_obs = np.array([row['Range(km)'], row['Range_Rate(km/s)']])
+                y_i = y_obs - y_ref
                 
-                # Map H to epoch: H_epoch = H_tk * Phi(tk, t0)
-                H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs) @ Phi_tk_t0
-                residual = y_obs - y_ref
+                # Global Jacobian mapping: H_epoch = H_local * Phi(tk, t0)
+                H_k = H_range_rangerate(x_ref[0:3], x_ref[3:6], Rs, Vs)
+                H = H_k @ Phi_tk_t0
                 
-                info_matrix += H.T @ inv_Rk @ H
-                normal_vector += H.T @ inv_Rk @ residual
+                Lambda += H.T @ inv_Rk @ H
+                N += H.T @ inv_Rk @ y_i
 
-            # 3. Solve for initial state correction at epoch (t0)
-            dx0 = np.linalg.solve(info_matrix, normal_vector)
+            # Solve for correction dx0
+            dx0 = np.linalg.solve(Lambda, N)
+            x0_star += dx0
             
-            # 4. Apply Correction
-            curr_x0 += dx0
+            final_P0 = np.linalg.inv(Lambda)
+            norm_dx0 = np.linalg.norm(dx0)
+            print(f"Correction Norm: {norm_dx0:.6e}")
             
-            correction_norm = np.linalg.norm(dx0)
-            print(f"Correction Norm: {correction_norm:.6e}")
-            
-            final_sol = sol
-            final_P0 = np.linalg.inv(info_matrix)
-            
-            # 5. Check Convergence
-            if correction_norm < tolerance:
+            if norm_dx0 < tolerance:
                 print("Converged!")
                 break
-        else:
-            print("Warning: Max iterations reached.")
+        
+        return self._generate_results(x0_star, sol, df_meas, final_P0, stations_ll, initial_guess_trajectory)
 
-        return self._compute_final_stats(final_sol, df_meas, final_P0, dx0, stations_ll)
-
-    def _compute_final_stats(self, sol, df_meas, P0_final, dx0_final, stations_ll):
+    def _generate_results(self, final_x0, sol, df_meas, P0_final, stations_ll, initial_guess_trajectory):
         """
-        Maps the converged initial correction forward in time to generate history.
+        Final pass to populate results for plotting and statistics.
         """
-        _dx_hist, _P_hist, _states, _post_fits = [], [], [], []
+        dx_hist = []
+        P_hist = []
+        postfit_res = []
+        corrected_states = []
 
         for k in range(len(sol.t)):
             Phi_tk_t0 = sol.y[6:, k].reshape(self.n, self.n)
             x_ref = sol.y[0:6, k]
             
-            # Propagate state deviation and covariance to current time tk
-            dx_k = Phi_tk_t0 @ dx0_final 
-            x_corrected_k = sol.y[0:6, k] + dx_k
-            P_k = Phi_tk_t0 @ P0_final @ Phi_tk_t0.T
-        
+            # Map covariance forward in time: P(t) = Phi(t,t0) * P0 * Phi(t,t0)^T
+            Pk = Phi_tk_t0 @ P0_final @ Phi_tk_t0.T
             
-            # Compute Post-fit Residuals
+            # State deviation: Final corrected path minus original uncorrected guess path
+            dx_hist.append(x_ref - initial_guess_trajectory[k])
+            
+            # Post-fit measurement calculation
             row = df_meas.iloc[k]
             station_idx = int(row['Station_ID']) - 1
             Rs, Vs = get_gs_eci_state(
                 stations_ll[station_idx][0], 
                 stations_ll[station_idx][1], 
-                sol.t[k], init_theta=np.deg2rad(122)
+                sol.t[k], 
+                init_theta=np.deg2rad(122)
             )
             
-            # Compute H for the reference (if needed for stats) and z_hat for residuals
+            y_ref = compute_rho_rhodot(x_ref, np.concatenate([Rs, Vs]))
             y_obs = np.array([row['Range(km)'], row['Range_Rate(km/s)']])
-
-            # Use compute_rho_rhodot to get the predicted measurement (y)
-            # This returns exactly [range, range_rate] which is shape (2,)
-            X_station = np.concatenate([Rs, Vs])
-            z_hat_post = compute_rho_rhodot(x_corrected_k, X_station)
-
-            # Now the subtraction works perfectly (2,) - (2,)
-            postfit_res = y_obs - z_hat_post
             
-            _dx_hist.append(dx_k)
-            _P_hist.append(P_k)
-            _states.append(x_ref + dx_k)
-            _post_fits.append(postfit_res)
+            P_hist.append(Pk)
+            postfit_res.append(y_obs - y_ref)
+            corrected_states.append(x_ref)
 
-        return IterativeBatchResults(_dx_hist, _P_hist, _states, _post_fits)
+        return IterativeBatchResults(dx_hist, P_hist, corrected_states, postfit_res)
 
 # ============================================================
 # Main Execution
@@ -162,8 +245,11 @@ class IterativeBatch:
 # Initial Reference State (Initial Guess)
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
-dx_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])  # Initial guess error
+dx_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3], dtype=float)
 state0_initial = np.concatenate([r0 + dx_0[0:3], v0 + dx_0[3:6], Phi0])
+
+
+
 
 # Ground Stations (lat, lon) [rad]
 stations_ll = np.deg2rad([
@@ -173,7 +259,7 @@ stations_ll = np.deg2rad([
 ])
 
 # Load Measurements
-df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
+df_meas = pd.read_csv(r'HW_2\measurements_noisy_3_compact.csv')
 
 # Initial Covariances & Weights
 # P0: Confidence in your initial r0, v0 guess
@@ -190,7 +276,7 @@ batch_results = batch_filter.run(
     P0_prior=P0, 
     Rk=Rk, 
     stations_ll=stations_ll,
-    max_iterations=10, 
+    max_iterations=5, 
     tolerance=1e-10
 )
 

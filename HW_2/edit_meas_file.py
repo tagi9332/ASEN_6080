@@ -1,32 +1,32 @@
 import pandas as pd
 
-# 1. Load the original noisy measurements
-# 'sep=None' helps pandas detect if it's strictly comma or space-separated
-df = pd.read_csv('HW_2/measurements_noisy_reece.csv', sep=None, engine='python')
+def convert_to_compact_format(input_csv, output_csv):
+    # Load the "verbose" format: (station, t, rho_km, rho_dot_km_s, elev_rad)
+    df = pd.read_csv(input_csv)
 
-# 2. Rename the columns to match the target format
-# Mapping: t -> Time(s), rho -> Range(km), rhodot -> Range_Rate(km/s), station_id -> Station_ID
-mapping = {
-    't': 'Time(s)',
-    'rho': 'Range(km)',
-    'rhodot': 'Range_Rate(km/s)',
-    'station_id': 'Station_ID'
-}
+    # 1. Map columns to the "reference" format
+    # Target: Time(s), Range(km), Range_Rate(km/s), Station_ID
+    mapping = {
+        't': 'Time(s)',
+        'rho_km': 'Range(km)',
+        'rho_dot_km_s': 'Range_Rate(km/s)'
+    }
+    
+    df_converted = df.rename(columns=mapping)
 
-# 3. Select only the columns we need and rename them
-df_converted = df[['t', 'rho', 'rhodot', 'station_id']].rename(columns=mapping)
+    # 2. Convert Station Name string (e.g., "Station 2") to ID (e.g., 2)
+    # This splits the string and takes the last element as an integer
+    df_converted['Station_ID'] = df_converted['station'].apply(
+        lambda x: int(str(x).split()[-1])
+    )
 
-# 4. Clean up the data types
-# Ensure Station_ID is an integer and Time/Range/Rate are floats
-df_converted['Station_ID'] = df_converted['Station_ID'].astype(int)
-df_converted['Time(s)'] = df_converted['Time(s)'].round(1)
+    # 3. Select and reorder the specific columns required
+    cols = ['Time(s)', 'Range(km)', 'Range_Rate(km/s)', 'Station_ID']
+    df_final = df_converted[cols]
 
-# 5. Save to the new CSV format
-output_filename = 'measurements_formatted.csv'
-df_converted.to_csv(output_filename, index=False)
+    # 4. Save to CSV
+    df_final.to_csv(output_csv, index=False)
+    print(f"Successfully converted to compact format: {output_csv}")
 
-print(f"Successfully converted data. Saved to: {output_filename}")
-
-# --- Quick Preview ---
-print("\nFirst 5 rows of formatted data:")
-print(df_converted.head())
+# Example usage:
+convert_to_compact_format(r'HW_2/measurements_noisy_3.csv', 'HW_2/measurements_noisy_3_compact.csv')
