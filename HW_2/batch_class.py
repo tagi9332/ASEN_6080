@@ -19,40 +19,6 @@ from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
 from utils.ground_station_utils.gs_latlon import get_gs_eci_state
 from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 
-@dataclass
-class IterativeBatchResults:
-    dx_hist: Any
-    P_hist: Any
-    corrected_state_hist: Any
-    postfit_residuals: Any
-
-    def __post_init__(self):
-        self.dx_hist = np.array(self.dx_hist)
-        self.P_hist = np.array(self.P_hist)
-        self.corrected_state_hist = np.array(self.corrected_state_hist)
-        self.postfit_residuals = np.array(self.postfit_residuals)
-
-import numpy as np
-from scipy.integrate import solve_ivp
-
-import numpy as np
-import pandas as pd
-from scipy.integrate import solve_ivp
-import matplotlib.pyplot as plt
-import scipy.stats as stats
-from dataclasses import dataclass
-from typing import Any
-
-# Assuming these imports exist in your environment
-# from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
-# from resources.constants import MU_EARTH, J2, R_EARTH
-# from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-# from utils.ground_station_utils.gs_latlon import get_gs_eci_state
-# from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
-
-
-
-
 def H_range_rangerate(R, V, Rs, Vs, eps=1e-12):
     """
     Measurement partials for simplified range and range-rate:
@@ -156,9 +122,6 @@ class IterativeBatch:
                 method="DOP853"
             )
 
-            # Reset Normal Equations (Information Form)
-            # Lambda = P0^-1 + sum(H^T R^-1 H)
-            # N = P0^-1 * (x0_bar - x0_star) + sum(H^T R^-1 y_i)
             Lambda = inv_P0.copy()
             N = inv_P0 @ (x0_bar - x0_star)
             
@@ -186,6 +149,8 @@ class IterativeBatch:
                 
                 Lambda += H.T @ inv_Rk @ H
                 N += H.T @ inv_Rk @ y_i
+
+                # Debug prints for each measurement
 
             # Solve for correction dx0
             dx0 = np.linalg.solve(Lambda, N)
@@ -263,7 +228,7 @@ df_meas = pd.read_csv(r'HW_2\measurements_noisy_3_compact.csv')
 
 # Initial Covariances & Weights
 # P0: Confidence in your initial r0, v0 guess
-P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
 # Rk: Measurement noise floor (Range and Range-Rate)
 Rk = np.diag([1e-6, 1e-12])
 
