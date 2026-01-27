@@ -1,8 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp
+from resources.constants import MU_EARTH
 
-def orbital_elements_to_inertial(a, e, i, raan, argp, ta, mu=398600.4415, units='rad'):
+def orbital_elements_to_inertial(a, e, i, raan, argp, ta, mu=MU_EARTH, units='rad'):
     """
     Classical Orbital Elements -> inertial position/velocity.
     """

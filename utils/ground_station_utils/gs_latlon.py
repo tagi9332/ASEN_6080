@@ -2,7 +2,7 @@ import numpy as np
 from resources.constants import R_EARTH
 
 
-def get_gs_eci_state(lat, lon, time, init_theta=0):
+def get_gs_eci_state(lat, lon, time, init_theta=np.deg2rad(122)):
     """
     Compute ground station ECI position and velocity from lat, lon, and time.
 

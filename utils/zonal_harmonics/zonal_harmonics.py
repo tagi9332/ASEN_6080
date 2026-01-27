@@ -1,11 +1,12 @@
 import numpy as np
+from resources.constants import R_EARTH
 
 def zonal_jacobian_nxn(r_vec, v_vec, coeffs):
     """
     Computes an nxn Jacobian matrix based on active gravity coefficients.
     coeffs = [mu, j2, j3]
     """
-    re = 6378.137 
+    re = R_EARTH
     mu, j2, j3 = coeffs
     
     # 1. Determine dimension (n) and parameter mapping
@@ -72,7 +73,7 @@ def zonal_sph_ode_nxn(t, state, coeffs):
     """
     ODE that handles dynamic state vector: [Pos(3), Vel(3), Params(1-3), Phi(n*n)]
     """
-    re = 6378.137
+    re = R_EARTH
     mu, j2, j3 = coeffs
     
     # Determine n based on the same logic as the Jacobian
@@ -124,7 +125,7 @@ def get_zonal_jacobian_6x6(r_vec, v_vec, coeffs):
     Fixed 6x6 Jacobian for [pos, vel].
     Includes J2/J3 in the gravity gradient math but excludes them from the state.
     """
-    re = 6378.137
+    re = R_EARTH
     mu, j2, j3 = coeffs
     
     x, y, z = r_vec
@@ -167,7 +168,7 @@ def zonal_sph_ode_6x6(t, state, coeffs):
     Fixed 6-state ODE: [x, y, z, vx, vy, vz, Phi(36)]
     High-fidelity physics, low-fidelity filter state.
     """
-    re = 6378.137
+    re = R_EARTH
     mu, j2, j3 = coeffs
     
     # 1. Unpack State (Always 6 + 36 = 42 elements)

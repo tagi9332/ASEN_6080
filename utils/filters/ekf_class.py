@@ -37,56 +37,42 @@ class EKF:
 
     def run(self, meas_df, x_0_dev, P0, Rk, Q, coeffs, 
             sol_ref_lkf, bootstrap_steps=10):
-        """
-        Runs a hybrid LKF/EKF filter.
-        
-        Phase 1 (k < bootstrap_steps): LKF Mode
-            - Relies on 'sol_ref_lkf' (pre-computed reference trajectory).
-            - Updates the deviation 'dx'.
-        
-        Phase 2 (k >= bootstrap_steps): EKF Mode
-            - Propagates the full state non-linearly using 'zonal_sph_ode_6x6'.
-            - Linearizes measurement H around the current estimate.
-        """
         
         # --- Initialization ---
-        # Initial Reference State (from the provided solution object)
         x_ref_0 = sol_ref_lkf.y[0:6, 0]
-        
-        # Current Best Estimate (Full State)
         x_est = x_ref_0 + x_0_dev
-        
-        # Current Covariance
         P = P0.copy()
         
         # LKF specific: Track deviation separately during bootstrap
         dx = x_0_dev.copy()
-        Phi_prev_lkf = np.eye(self.n) # STM accumulator for LKF
+        Phi_prev_lkf = np.eye(self.n) 
         
         # History lists
         hist_P, hist_state, hist_dx = [], [], []
         hist_innov, hist_post, hist_S = [], [], []
         hist_times = []
 
-        # Time management
         t_prev = sol_ref_lkf.t[0]
 
-        # Loop through measurements
         for k in range(len(meas_df)):
             meas_row = meas_df.iloc[k]
             t_curr = meas_row['Time(s)']
             dt = t_curr - t_prev
             
-            # --- 1. PREDICTION STEP ---
+            # Get Ground Station State for this step
+            station_idx = int(meas_row['Station_ID']) - 1
+            lat, lon = stations_ll[station_idx]
+            Rs, Vs = get_gs_eci_state(lat, lon, t_curr, init_theta=np.deg2rad(122))
+            
+            # --- 1. PREDICTION & H MATRIX CALCULATION ---
             if k < bootstrap_steps:
                 # === MODE: LKF (Linearized Kalman Filter) ===
-                # Logic: Propagate deviation (dx) using pre-computed STM from reference
                 
-                # Fetch Reference State and Global STM at step k
+                # Fetch Reference State
                 x_ref_k = sol_ref_lkf.y[0:6, k]
                 Phi_global_k = sol_ref_lkf.y[6:, k].reshape(self.n, self.n)
-                
-                # Compute Incremental STM (k-1 to k)
+
+                # Compute Incremental STM
                 if k == 0:
                     Phi_step = np.eye(self.n)
                 else:
@@ -99,17 +85,17 @@ class EKF:
                 # Propagate Covariance
                 P_pred = Phi_step @ P @ Phi_step.T + (Q * dt)
                 
-                # Store for next loop
+                # Compute H Matrix (Using Reference - Standard LKF)
+                H = compute_H_matrix(x_ref_k[0:3], x_ref_k[3:6], Rs, Vs)
+                
+                # Store STM for next loop
                 Phi_prev_lkf = Phi_global_k
                 
             else:
                 # === MODE: EKF (Extended Kalman Filter) ===
-                # Logic: Propagate full state (x_est) using nonlinear ODE
                 
-                # Initial condition for integration: [Pos, Vel, STM=Identity]
+                # Propagate Full State
                 state_integ_0 = np.concatenate([x_est, np.eye(self.n).flatten()])
-                
-                # Integrate from t_prev to t_curr
                 sol_step = solve_ivp(
                     zonal_sph_ode_6x6, 
                     (t_prev, t_curr), 
@@ -118,34 +104,24 @@ class EKF:
                     rtol=1e-12, atol=1e-12
                 )
                 
-                # Extract results at t_curr
                 x_pred = sol_step.y[0:6, -1]
                 Phi_step = sol_step.y[6:, -1].reshape(self.n, self.n)
                 
                 # Propagate Covariance
                 P_pred = Phi_step @ P @ Phi_step.T + (Q * dt)
                 
-                # For logging consistency, dx is 0 in EKF mode (or difference from reference if available)
+                # Compute H Matrix (Using Estimate - EKF)
+                H = compute_H_matrix(x_pred[0:3], x_pred[3:6], Rs, Vs)
+                
+                # dx_pred is implicitly 0 relative to the linearization point in EKF
                 dx_pred = np.zeros(6) 
 
-            # --- 2. GROUND STATION GEOMETRY ---
-            station_idx = int(meas_row['Station_ID']) - 1
-            
-            # --- FIX APPLIED HERE: Unpack only 2 values (lat, lon) ---
-            lat, lon = stations_ll[station_idx]
-            
-            # Rotate Earth to t_curr to get Station ECI state
-            Rs, Vs = get_gs_eci_state(lat, lon, t_curr, init_theta=np.deg2rad(122))
-            
-            # --- 3. MEASUREMENT UPDATE ---
-            # Predicted Observation (Range, Range-Rate)
+            # --- 2. MEASUREMENT UPDATE ---
+            # Predicted Observation
             y_pred_vec = compute_rho_rhodot(x_pred, np.concatenate([Rs, Vs]))
             y_obs_vec = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
             
-            # H Matrix (Linearized about predicted state)
-            H = compute_H_matrix(x_pred[0:3], x_pred[3:6], Rs, Vs)
-            
-            # Innovations (Pre-fit Residuals)
+            # Innovations
             innov = y_obs_vec - y_pred_vec
             
             # Kalman Gain
@@ -158,22 +134,31 @@ class EKF:
             # Apply Correction
             if k < bootstrap_steps:
                 dx = dx_pred + update
+                # Re-fetch x_ref_k here to be safe (it is in scope because of the if block)
+                x_ref_k = sol_ref_lkf.y[0:6, k]
                 x_est = x_ref_k + dx
             else:
                 x_est = x_pred + update
             
-            # Covariance Update (Joseph Form for stability)
+            # Covariance Update (Joseph Form)
             IKH = self.I - K @ H
             P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
             
-            # Post-fit Residuals (for analysis)
+            # Post-fit Residuals
             y_post_vec = compute_rho_rhodot(x_est, np.concatenate([Rs, Vs]))
             post_res = y_obs_vec - y_post_vec
 
-            # --- 4. LOGGING ---
+            # --- 3. LOGGING ---
             hist_state.append(x_est.copy())
             hist_P.append(P.copy())
-            hist_dx.append(dx.copy() if k < bootstrap_steps else (x_est - sol_ref_lkf.y[0:6, k]))
+            
+            # Calculate deviation for plotting
+            if k < bootstrap_steps:
+                hist_dx.append(dx.copy())
+            else:
+                # Compare EKF estimate to the reference for consistency in plots
+                hist_dx.append(x_est - sol_ref_lkf.y[0:6, k])
+
             hist_innov.append(innov)
             hist_post.append(post_res)
             hist_S.append(S)

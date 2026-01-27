@@ -1,6 +1,6 @@
 # Compute A transformation matrix from orbital elements
 import numpy as np
-from data.resources.constants import MU_EARTH
+from resources.constants import MU_EARTH
 
 def compute_a_matrix(SMA, theta, inc, q1, q2):
     """

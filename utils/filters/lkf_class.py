@@ -79,14 +79,16 @@ class LKF:
             
             x = x_pred + K @ prefit_res
 
+            # Joseph Form Covariance Update
+            IKH = self.I - K @ H
+            P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
+
             # Recompute H for post-fit residual
             y_pred = compute_rho_rhodot(x_ref + x, np.concatenate([Rs, Vs]))
             H = compute_H_matrix(x_ref[0:3] + x[0:3], x_ref[3:6] + x[3:6], Rs, Vs)
             postfit_res = y_obs - (y_pred)
             
-            # Joseph Form Covariance Update
-            IKH = self.I - K @ H
-            P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
+
 
             # --- 4. Append Copies to Lists ---
             _x.append(x.copy())
