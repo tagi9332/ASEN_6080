@@ -1,6 +1,6 @@
 import numpy as np
 
-def report_filter_metrics(times, state_errors, postfit_residuals, filter_name="Filter", ignore_first_value=True):
+def report_filter_metrics(times, state_errors, postfit_residuals, filter_name="Filter", ignore_first_n_values=100):
     """
     Reports State RMS errors (component-wise & 3D) and Post-fit Residual RMS.
     
@@ -9,14 +9,14 @@ def report_filter_metrics(times, state_errors, postfit_residuals, filter_name="F
     state_errors (ndarray): Nx6 array (x, y, z, vx, vy, vz) in km and km/s.
     postfit_residuals (ndarray): Nx2 array (range, range-rate) in km and km/s.
     filter_name (str): Name of the filter for the print header.
-    ignore_first_value (bool): If True, excludes the first data point from RMS calculations.
+    ignore_first_n_values (int): Number of initial data points to exclude from RMS calculations.
     """
     
-    # Apply slicing if ignore_first_value is True
-    if ignore_first_value:
-        state_errors = state_errors[1:]
-        postfit_residuals = postfit_residuals[1:]
-        # times = times[1:] # Optional: slice times if you use them for calculations
+    # Apply slicing to ignore the first n values
+    if ignore_first_n_values > 0:
+        state_errors = state_errors[ignore_first_n_values:]
+        postfit_residuals = postfit_residuals[ignore_first_n_values:]
+        # times = times[ignore_first_n_values:] # Optional: slice times if you use them for calculations
 
     # 1. State RMS Errors (Component-wise)
     rms_state = np.sqrt(np.mean(state_errors**2, axis=0))
@@ -30,8 +30,8 @@ def report_filter_metrics(times, state_errors, postfit_residuals, filter_name="F
 
     print(f"\n" + "="*50)
     print(f"REPORT: {filter_name}")
-    if ignore_first_value:
-        print(" (Note: Initial state/residual excluded from metrics)")
+    if ignore_first_n_values > 0:
+        print(f" (Note: Initial {ignore_first_n_values} state/residual values excluded from metrics)")
     print("="*50)
     
     print(f"--- State RMS Errors (Component-wise) ---")
@@ -48,7 +48,7 @@ def report_filter_metrics(times, state_errors, postfit_residuals, filter_name="F
     
     print(f"\n--- Post-fit Residual RMS ---")
     print(f"Range:      {rms_residuals[0]*1e3:.6f} m")
-    print(f"Range-Rate: {rms_residuals[1]*1e3:.6f} mm/s")
+    print(f"Range-Rate: {rms_residuals[1]*1e3:.6f} m/s")
     print("="*50 + "\n")
 
     return {
