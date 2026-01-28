@@ -153,7 +153,7 @@ if __name__ == "__main__":
     ]))
 
     # Load spacecraft trajectory data
-    data = np.loadtxt('HW_1/HW1_truth.csv', delimiter=' ')
+    data = np.loadtxt('HW_1/problem_2a_traj.csv', delimiter=' ')
     times = data[:, 0]
     sc_positions = data[:, 1:4]
     sc_velocities = data[:, 4:7]

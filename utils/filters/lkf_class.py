@@ -35,7 +35,7 @@ class LKF:
         self.I = np.eye(n_states)
 
     def run(self, sol_ref, meas_df, x_0, P0, Rk, Q) -> LKFResults:
-        # Local state variables
+        # Initialization
         x = x_0.copy()
         P = P0.copy()
         Phi_prev = np.eye(self.n)
@@ -88,8 +88,6 @@ class LKF:
             H = compute_H_matrix(x_ref[0:3] + x[0:3], x_ref[3:6] + x[3:6], Rs, Vs)
             postfit_res = y_obs - (y_pred)
             
-
-
             # --- 4. Append Copies to Lists ---
             _x.append(x.copy())
             _P.append(P.copy())

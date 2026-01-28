@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def compute_state_error(x_corrected, df_meas):
+def compute_state_error(x_corrected, df_meas, truth_file):
     """
     Compute the state estimation error by comparing the corrected state estimates
     against the ground truth data.
@@ -14,7 +14,7 @@ def compute_state_error(x_corrected, df_meas):
     """
 
     # 1. Load Truth Data with the correct delimiter
-    df_truth = pd.read_csv(r'HW_2\HW1_truth.csv', sep=r'\s+', header=None)
+    df_truth = pd.read_csv(truth_file, sep=r'\s+', header=None)
 
     # 2. Assign column names for clarity
     df_truth.columns = ['Time', 'x', 'y', 'z', 'vx', 'vy', 'vz']

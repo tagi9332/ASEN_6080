@@ -28,8 +28,8 @@ from utils.plotting.compute_state_error import compute_state_error
 x_0_dev = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
 
 # Initial Covariance (P0)
-# P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
-P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
+# P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
 
 
 # Measurement Noise (Rk): [Range (km^2), Range-Rate (km/s)^2]
@@ -52,7 +52,7 @@ Phi0 = np.eye(6).flatten()
 state0_ref = np.concatenate([r0 + x_0_dev[:3], v0 + x_0_dev[3:], Phi0])
 
 # Load Measurements
-df_meas = pd.read_csv(r'HW_2/measurements_noisy.csv')
+df_meas = pd.read_csv(fr'HW_2\measurements_2a_noisy.csv')
 time_eval = df_meas['Time(s)'].values
 
 # ODE arguments
@@ -69,7 +69,7 @@ sol = solve_ivp(
     atol=1e-10
 )
 
-# 3. Run the Filter (Hybrid LKF -> EKF)
+# Run the Filter (Hybrid LKF -> EKF)
 # -------------------------------------
 ekf_filter = EKF(n_states=6)
 
@@ -82,11 +82,11 @@ results = ekf_filter.run(
     Q=Q,
     coeffs=coeffs,
     sol_ref_lkf=sol,
-    bootstrap_steps=1000  # Optional: Define how many steps to stay in LKF mode
+    bootstrap_steps=0 # Optional: Define how many steps to stay in LKF mode
 )
 # --- Unpack results ---
 # Create a mask to slice off the bootstrap period
-start_idx = 170  # Must match your bootstrap_steps=100
+start_idx = 180  # Must match your bootstrap_steps=100
 
 # Apply mask to all historical data
 dx_hist = results.dx_hist[start_idx:]
@@ -100,7 +100,8 @@ times = results.times[start_idx:]
 # Compute state errors against truth after bootstrap
 state_errors = compute_state_error(
     x_corrected=corrected_state_hist, 
-    df_meas=df_meas.iloc[start_idx:]
+    df_meas=df_meas.iloc[start_idx:],
+    truth_file=r'HW_2\problem_2a_traj.csv'
 )
 state_errors_m = np.array(state_errors)*1e3  # Convert to meters for error analysis
 # ============================================================
@@ -233,5 +234,7 @@ report_filter_metrics(
     times=times,
     state_errors=state_errors,
     postfit_residuals=postfit_residuals,
-    filter_name="Extended Kalman Filter"
+    filter_name="Extended Kalman Filter",
+    ignore_first_n_values=0
+
 )

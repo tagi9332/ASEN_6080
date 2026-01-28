@@ -37,12 +37,12 @@ stations_ll = np.deg2rad([
 ])
 
 # Load Measurements
-df_meas = pd.read_csv(fr'HW_2\measurements_noisy_3_compact.csv')
+df_meas = pd.read_csv(fr'HW_2\measurements_2a_noisy.csv')
 
 # Initial Covariances & Weights
 # P0: Confidence in your initial r0, v0 guess
-# P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
-P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
+# P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
 # Rk: Measurement noise floor (Range and Range-Rate)
 Rk = np.diag([1e-6, 1e-12])
 
@@ -67,7 +67,7 @@ x_corrected = batch_results.corrected_state_hist
 postfit_residuals = batch_results.postfit_residuals
 
 # Compute State Errors
-state_errors = compute_state_error(x_corrected, df_meas)
+state_errors = compute_state_error(x_corrected, df_meas, truth_file=r'HW_2\problem_2a_traj.csv')
 state_errors_m = state_errors * 1e3  # Convert to meters and m/s
 
 # ============================================================
@@ -203,5 +203,6 @@ report_filter_metrics(
     times=np.array(df_meas['Time(s)']),
     state_errors=state_errors,
     postfit_residuals=np.array(postfit_residuals),
-    filter_name="Iterative Batch Filter"
+    filter_name="Iterative Batch Filter",
+    ignore_first_n_values=500
 )

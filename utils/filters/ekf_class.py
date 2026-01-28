@@ -39,8 +39,7 @@ class EKF:
             sol_ref_lkf, bootstrap_steps=10):
         
         # --- Initialization ---
-        x_ref_0 = sol_ref_lkf.y[0:6, 0]
-        x_est = x_ref_0 + x_0_dev
+        x_est = sol_ref_lkf.y[0:6, 0]
         P = P0.copy()
         
         # LKF specific: Track deviation separately during bootstrap
@@ -101,7 +100,7 @@ class EKF:
                     (t_prev, t_curr), 
                     state_integ_0,
                     args=(coeffs,),
-                    rtol=1e-12, atol=1e-12
+                    rtol=1e-10, atol=1e-10
                 )
                 
                 x_pred = sol_step.y[0:6, -1]

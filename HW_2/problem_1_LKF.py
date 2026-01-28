@@ -24,8 +24,8 @@ from utils.plotting.compute_state_error import compute_state_error
 # ============================================================
 # Initial State Deviation & Covariances
 x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
-# P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
-P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
+P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
+# P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
 Rk = np.diag([1e-6, 1e-12])
 
 # Initial Truth State (without deviation)
@@ -37,7 +37,7 @@ state0 = np.concatenate([r0+x_0[:3], v0+x_0[3:], Phi0])
 
 
 # Load Measurements
-df_meas = pd.read_csv(r'HW_2\measurements_noisy.csv')
+df_meas = pd.read_csv(fr'HW_2\measurements_2a_noisy.csv')
 time_eval = df_meas['Time(s)'].values
 
 # ODE arguments
@@ -75,6 +75,7 @@ S_hist = np.array(results.S_hist)
 state_errors = compute_state_error(
     x_corrected=corrected_state_hist, 
     df_meas=df_meas,
+    truth_file=r'HW_2\problem_2a_traj.csv'
 )
 state_errors_m = np.array(state_errors)*1e3  # Convert to meters for error analysis
 
@@ -222,5 +223,7 @@ report_filter_metrics(
     times=sol.t,
     state_errors=state_errors,
     postfit_residuals=postfit_residuals,
-    filter_name="Linearized Kalman Filter"
+    filter_name="Linearized Kalman Filter",
+    ignore_first_n_values=500
+
 )

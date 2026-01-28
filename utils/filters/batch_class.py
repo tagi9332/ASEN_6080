@@ -41,8 +41,7 @@ class IterativeBatch:
         x0_star = x0_bar.copy()
         t_meas = meas_df['Time(s)'].values
 
-        # 1. Generate the Baseline (Initial Guess Trajectory)
-        # We append an identity STM because zonal_sph_ode_6x6 requires 42 elements to reshape
+        # Generate the Baseline (Initial Guess Trajectory)
         phi0_flat = np.eye(self.n).flatten()
         state_baseline = np.concatenate([x0_bar, phi0_flat])
 
@@ -56,14 +55,13 @@ class IterativeBatch:
             rtol=1e-10, atol=1e-10,
             method="DOP853"
         )
-        # We only need the r and v components (first 6) for the baseline comparison
         initial_guess_trajectory = initial_sol.y[:6, :].T 
         
         # Track these for the final output
         final_P0 = P0_prior
         sol = None
 
-        # 2. Iterative Batch Loop (Differential Correction)
+        # Iterative Batch Loop (Differential Correction)
         for i in range(max_iterations):
             print(f"--- Iteration {i+1} ---")
             phi0 = np.eye(self.n).flatten()
@@ -108,7 +106,6 @@ class IterativeBatch:
                 Lambda += H.T @ inv_Rk @ H
                 N += H.T @ inv_Rk @ y_i
 
-                # Debug prints for each measurement
 
             # Solve for correction dx0
             dx0 = np.linalg.solve(Lambda, N)
