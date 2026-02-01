@@ -43,7 +43,7 @@ Phi0 = np.eye(6).flatten()
 X_0 = np.concatenate([r0 + x_0[:3], v0 + x_0[3:], Phi0])
 
 # Load Measurements
-obs = pd.read_csv(fr'HW_2\measurements_noisy.csv')
+obs = pd.read_csv(fr'data\measurements_noisy.csv')
 time_eval = obs['Time(s)'].values
 
 # Filter arguments
@@ -72,7 +72,7 @@ results = ekf_filter.run(
 
 # Run post-processing
 post_options = {
-    'truth_traj_file': r'HW_2\HW1_truth.csv',
+    'truth_traj_file': r'data\HW1_truth.csv',
     'save_to_timestamped_folder': True,
     'data_mask_idx': 0,
     'plot_state_errors': True,
@@ -85,4 +85,4 @@ post_options = {
     'plot_nis_metric': True
 }
 
-post_process(results,obs,post_options)
+post_process(results, obs, post_options)
