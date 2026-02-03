@@ -81,13 +81,18 @@ class LKF:
         P = P0.copy()
         Phi_prev = np.eye(self.n)
 
-        # Temporary lists for collection
-        _x, _P, _state, _prefit_res, _postfit_res, _nis = [], [], [], [], [], []
+        # Initialize lists for collection
+        _x = [x_0.copy()]
+        _P = [P0.copy()]
+        _state = [X_0.copy()]
+        _prefit_res = [np.zeros(2)]
+        _postfit_res = [np.zeros(2)]
+        _nis = [0.0]
 
         # Define Earth Rotation Vector for Cross Product
         w_vec = np.array([0, 0, OMEGA_EARTH])
 
-        for k in range(len(sol_ref.t)):
+        for k in range(1,len(sol_ref.t)):
             print_progress(k, len(sol_ref.t))
             
             # Current time
@@ -124,10 +129,6 @@ class LKF:
             r_sc_ref = X_ref_k[0:3]
             v_sc_ref = X_ref_k[3:6]
             sc_state_full = np.concatenate([r_sc_ref, v_sc_ref])
-
-            # 2. Ground Station Reference -> ANALYTICAL UPDATE (Your Fix)
-            # Instead of taking the integrated value, we rotate the INITIAL value 
-            # by theta = w * t. This prevents integration drift for the stations.
             
             # Get index of this station in the INITIAL state vector X_0
             st_idx_start = 9 + (3 * station_idx)
@@ -154,7 +155,7 @@ class LKF:
 
             # D. Predict Measurement (Non-linear h(x_ref))
             y_pred_ref = compute_rho_rhodot(sc_state_full, gs_state_full)
-            y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
+            y_obs = np.array([meas_row['Range(m)'], meas_row['Range_Rate(m/s)']])
 
             # E. Compute H Matrix (18x2)
             # Note: We pass the ANALYTICAL station pos into X_ref_k temporary copy
@@ -190,7 +191,7 @@ class LKF:
             _P.append(P.copy())
             # Store the Analytical ref + estimated deviation
             _state.append((X_ref_k_analytical + x).copy())
-            _prefit_res.append(prefit_res.copy())
+            _prefit_res.append(prefit_res.copy()) # type: ignore
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis.copy())
             

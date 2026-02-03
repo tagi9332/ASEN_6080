@@ -1,5 +1,5 @@
 import numpy as np
-from resources.constants import R_EARTH, OMEGA_EARTH
+from resources.constants import R_EARTH, OMEGA_EARTH, H
 from utils.drag_model.compute_drag_accel import get_drag_acceleration
 from utils.drag_model.compute_atm_rho import compute_atm_rho
 
@@ -210,15 +210,8 @@ def zonal_sph_ode_6x6(t, state, coeffs):
 
 def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     """
-    Computes the rate of change for the 18-element state vector.
-    
-    Inputs:
-        t (float): Current time
-        state (np.array): 18-element state vector
-                          [x, y, z, vx, vy, vz, mu, J2, Cd, stations...]
-    
-    Outputs:
-        d_state (np.array): 18-element derivative vector
+    Computes EOM in METERS.
+    state: 18-element vector [pos, vel, mu, J2, Cd, stations...]
     """
     
     # Extract State
@@ -228,7 +221,7 @@ def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     j2 = state[7]
     cd = state[8]
     
-    # Ground Stations (3 sets of 3 coordinates)
+    # Ground Stations
     rs_1 = state[9:12]
     rs_2 = state[12:15]
     rs_3 = state[15:18]
@@ -239,10 +232,12 @@ def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     v_sq = vx**2 + vy**2 + vz**2
     v_mag = np.sqrt(v_sq)
     
+    # Units: [kg/m^3]
     rho = compute_atm_rho(r_mag)
     
-    # Ballistic Coefficient term (0.5 * Cd * A / m)
-    drag_const = (cd * area) / mass 
+    # Drag Ballistic Term
+    # [m^2 / kg]
+    drag_b_term = (cd * area) / mass 
     
     # Calculate Accelerations
     
@@ -250,19 +245,21 @@ def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     ri_r_sq = (R_EARTH / r_mag)**2
     z_r_sq = (z / r_mag)**2
     
-    # Pre-compute the Gravity/J2 scalar factor
     j2_factor_x_y = 1 + ri_r_sq * j2 * (7.5 * z_r_sq - 1.5)
     j2_factor_z   = 1 + ri_r_sq * j2 * (7.5 * z_r_sq - 4.5)
     
     mu_r3 = mu / (r_mag**3)
     
-    drag_factor = 0.5 * rho * drag_const * v_mag
+    # Drag Force per unit mass = 0.5 * rho * v^2 * (Cd*A/m) * (v_vec / v)
+    # Simplifies to: 0.5 * rho * v * (Cd*A/m) * v_vec
+    # Units: [kg/m^3] * [m/s] * [m^2/kg] * [m/s] = [m/s^2] -> OK
+    drag_factor = 0.5 * rho * drag_b_term * v_mag
     
     ax = -(mu_r3 * x) * j2_factor_x_y - drag_factor * vx
     ay = -(mu_r3 * y) * j2_factor_x_y - drag_factor * vy
     az = -(mu_r3 * z) * j2_factor_z   - drag_factor * vz
 
-    # Calculate station velocities
+    # Calculate station velocities (Earth Rotation)
     w_earth = np.array([0, 0, OMEGA_EARTH])
     
     rs_1_dot = np.cross(w_earth, rs_1)
@@ -321,7 +318,8 @@ def stm_eom_mu_j2_drag(t, x_phi_augmented):
 
 def compute_jacobian_18x18(state):
     """
-    Computes 18x18 Jacobian for Orbital Dynamics in KM units.
+    Computes 18x18 Jacobian for Orbital Dynamics in METERS.
+    State: [x, y, z, vx, vy, vz, mu, J2, Cd, GS1(3), GS2(3), GS3(3)]
     """
     # 1. Extract State
     x, y, z = state[0], state[1], state[2]
@@ -330,20 +328,11 @@ def compute_jacobian_18x18(state):
     J2_curr = state[7]
     Cd = state[8]
 
-    # 2. Constants (Converted to KM where necessary)
-    Ri = R_EARTH         # km
+    # 2. Constants & Spacecraft Physical Params
+    Ri = R_EARTH         # [m]
     Ri2 = Ri**2
-    
-    # Atmosphere Constants
-    rho0 = 3.614e-13     # kg/m^3 (Keep standard SI)
-    
-    # Convert these to KM to match position 'r'
-    r0_atmos = 700.0 + R_EARTH  # Ref radius (700 km altitude + Earth Radius)
-    H = 88.667           # Scale height in km (88667 m -> 88.667 km)
-    
-    # Spacecraft Physical Params
-    Asc = 3.0            # m^2
-    m_sat = 970.0        # kg
+    Asc = 3.0            # [m^2]
+    m_sat = 970.0        # [kg]
 
     # 3. Derived Quantities
     r_sq = x**2 + y**2 + z**2
@@ -352,71 +341,84 @@ def compute_jacobian_18x18(state):
     v_sq = vx**2 + vy**2 + vz**2
     v = np.sqrt(v_sq)
 
-    # Density (r and H are now both in km, so the exponent is dimensionless - GOOD)
-    rho = rho0 * np.exp(-(r - r0_atmos) / H)
-    
-    # Combine all constants including the unit conversion factor
-    unit_conv = 1e-3
-    B_star = 0.5 * (Cd * Asc / m_sat) * unit_conv 
+    # Compute Atmospheric Density [kg/m^3]
+    # NOTE: Ensure this function accepts Meters and returns kg/m^3
+    rho = compute_atm_rho(r) 
+
+    # Ballistic Coefficient (1/2 * Cd * A / m) [m^2/kg]
+    B_star = 0.5 * (Cd * Asc / m_sat)
     
     # Pre-compute common terms
-    drag_pre = B_star * rho * v # This part is used for velocity partials
-    atmos_grad_pre = (-1.0/H) * B_star * rho * v # Used for position partials
+    # Partial of density w.r.t position (assuming exponential model d_rho/dr = -rho/H)
+    # Result units: [(kg/m^3) * (1/m)] = [kg/m^4]
+    if H > 0:
+        d_rho_dr = -rho / H 
+    else:
+        d_rho_dr = 0.0
+
+    # Common Drag Gradient Term: B_star * d_rho/dr * v
+    atmos_grad_pre = B_star * d_rho_dr * v 
     
     # --- BLOCK 1: d(Acc)/d(Pos) ---
     r5, r7, r9 = r**5, r**7, r**9
     
-    # Gravity Gradient (J2)
-    # Re-use your existing correct J2 logic
-    # Note: Ensure Ri and r are both km (Checked above)
-    
-    # Helper to clean up the code:
-    # Point mass term: -mu/r^3 * x
-    # J2 term: ...
-    
-    # Let's calculate the specific terms for the Jacobian
-    # (Using the explicit formulation you provided, just ensuring variables map correctly)
-    
-    # X-Row
-    term_grav_x = -mu * ( ((r_sq - 3*x**2)/r5) + ((Ri2*J2_curr)/2) * ( (15*(x**2 + z**2)/r7) - ((105*x**2*z**2)/r9) - (3/r5) ) )
-    term_drag_x = atmos_grad_pre * vx * (x/r) # d(rho)/dr * dr/dx * ...
+    # X-Row Gradients
+    # Gravity (Point Mass + J2)
+    term_grav_x = -mu * ( 
+        ((r_sq - 3*x**2)/r5) + 
+        ((Ri2 * J2_curr) / 2) * ( (15*(x**2 + z**2)/r7) - ((105*x**2*z**2)/r9) - (3/r5) ) 
+    )
+    # Drag: d(a_drag)/dx = d(a)/d(rho) * d(rho)/dr * dr/dx
+    term_drag_x = atmos_grad_pre * vx * (x/r)
     delXddDelX = term_grav_x + term_drag_x
 
-    term_grav_xy = mu * ( ((3*x*y)/r5) - ((Ri2*J2_curr*x*y)/2) * ((15/r7) - ((105*z**2)/r9)) )
+    # X-Y Cross Terms
+    term_grav_xy = mu * ( 
+        ((3*x*y)/r5) - 
+        ((Ri2 * J2_curr * x * y) / 2) * ((15/r7) - ((105*z**2)/r9)) 
+    )
     term_drag_xy = atmos_grad_pre * vx * (y/r)
     delXddDelY = term_grav_xy + term_drag_xy
 
-    term_grav_xz = mu * ( ((3*x*z)/r5) - ((Ri2*J2_curr*x*z)/2) * ((45/r7) - ((105*z**2)/r9)) )
+    # X-Z Cross Terms
+    term_grav_xz = mu * ( 
+        ((3*x*z)/r5) - 
+        ((Ri2 * J2_curr * x * z) / 2) * ((45/r7) - ((105*z**2)/r9)) 
+    )
     term_drag_xz = atmos_grad_pre * vx * (z/r)
     delXddDelZ = term_grav_xz + term_drag_xz
 
-    # Y-Row
+    # Y-Row Gradients
     delYddDelX = term_grav_xy + atmos_grad_pre * vy * (x/r)
     
-    term_grav_y = -mu * ( ((r_sq - 3*y**2)/r5) + ((Ri2*J2_curr)/2) * ( (15*(y**2 + z**2)/r7) - ((105*y**2*z**2)/r9) - (3/r5) ) )
+    term_grav_y = -mu * ( 
+        ((r_sq - 3*y**2)/r5) + 
+        ((Ri2 * J2_curr) / 2) * ( (15*(y**2 + z**2)/r7) - ((105*y**2*z**2)/r9) - (3/r5) ) 
+    )
     term_drag_y = atmos_grad_pre * vy * (y/r)
     delYddDelY = term_grav_y + term_drag_y
 
-    term_grav_yz = mu * ( ((3*y*z)/r5) - ((Ri2*J2_curr*y*z)/2) * ((45/r7) - ((105*z**2)/r9)) )
+    term_grav_yz = mu * ( 
+        ((3*y*z)/r5) - 
+        ((Ri2 * J2_curr * y * z) / 2) * ((45/r7) - ((105*z**2)/r9)) 
+    )
     term_drag_yz = atmos_grad_pre * vy * (z/r)
     delYddDelZ = term_grav_yz + term_drag_yz
 
-    # Z-Row
+    # Z-Row Gradients
     delZddDelX = term_grav_xz + atmos_grad_pre * vz * (x/r)
     delZddDelY = term_grav_yz + atmos_grad_pre * vz * (y/r)
     
-    term_grav_z = -mu * ( ((r_sq - 3*z**2)/r5) + ((Ri2*J2_curr)/2) * ( (90*z**2/r7) - ((105*z**4)/r9) - (9/r5) ) )
+    term_grav_z = -mu * ( 
+        ((r_sq - 3*z**2)/r5) + 
+        ((Ri2 * J2_curr) / 2) * ( (90*z**2/r7) - ((105*z**4)/r9) - (9/r5) ) 
+    )
     term_drag_z = atmos_grad_pre * vz * (z/r)
     delZddDelZ = term_grav_z + term_drag_z
 
     # --- BLOCK 2: d(Acc)/d(Vel) ---
-    # Drag only.
-    # d(v*vx)/dvx = v + vx^2/v
-    
-    # Common factor is -B_star * rho
-    # Your previous code used dragConst * rho. 
-    # B_star includes the 0.5 and unit conversion.
-    
+    # a_drag = -B_star * rho * v * v_vec
+    # This requires derivative of (v * v_vec)
     C = -B_star * rho 
     
     delXddDelXd = C * ((vx**2 / v) + v)
@@ -436,6 +438,7 @@ def compute_jacobian_18x18(state):
     # 1. d/dMu
     r3 = r**3
     z_r = z / r
+    # J2 term scaling for Mu partial
     j2_term_mu = (1 + (Ri/r)**2 * J2_curr * (7.5 * z_r**2 - 1.5))
     
     delXddDelMu = (-x / r3) * j2_term_mu
@@ -449,48 +452,45 @@ def compute_jacobian_18x18(state):
     delZddDelJ2 = j2_common * z * (7.5 * z_r**2 - 4.5)
     
     # 3. d/dCd
-    # a_drag = -0.5 * (Cd * A / m) * rho * v * vec(v) * unit_conv
+    # a_drag = -0.5 * (Cd * A / m) * rho * v * vec(v)
     # d(a)/dCd = a_drag / Cd
-    cd_common = -0.5 * (Asc / m_sat) * rho * v * unit_conv
+    # In METERS, no unit conversion needed.
+    cd_common = -0.5 * (Asc / m_sat) * rho * v
     delXddDelCd = cd_common * vx
     delYddDelCd = cd_common * vy
     delZddDelCd = cd_common * vz
 
     # --- ASSEMBLE MATRIX ---
-    # (Using the optimized pre-allocation method)
     A = np.zeros((18, 18))
     
-    # Identity for Velocity
+    # Identity for Position -> Velocity
     A[0, 3] = 1.0; A[1, 4] = 1.0; A[2, 5] = 1.0
 
-    # Dynamics Gradients
-    # Pos
+    # Dynamics Gradients (Acc / Pos)
     A[3,0]=delXddDelX; A[3,1]=delXddDelY; A[3,2]=delXddDelZ
     A[4,0]=delYddDelX; A[4,1]=delYddDelY; A[4,2]=delYddDelZ
     A[5,0]=delZddDelX; A[5,1]=delZddDelY; A[5,2]=delZddDelZ
     
-    # Vel
+    # Dynamics Gradients (Acc / Vel)
     A[3,3]=delXddDelXd; A[3,4]=delXddDelYd; A[3,5]=delXddDelZd
     A[4,3]=delYddDelXd; A[4,4]=delYddDelYd; A[4,5]=delYddDelZd
     A[5,3]=delZddDelXd; A[5,4]=delZddDelYd; A[5,5]=delZddDelZd
     
-    # Params
+    # Parameter Sensitivities (Acc / Params)
+    # Col 6: Mu, Col 7: J2, Col 8: Cd
     A[3,6]=delXddDelMu; A[3,7]=delXddDelJ2; A[3,8]=delXddDelCd
     A[4,6]=delYddDelMu; A[4,7]=delYddDelJ2; A[4,8]=delYddDelCd
     A[5,6]=delZddDelMu; A[5,7]=delZddDelJ2; A[5,8]=delZddDelCd
     
-    # Station Rotation (ECI frame rotation cross product)
-    # Omega x r -> Cross product matrix
-    # [ 0 -w  0 ]
-    # [ w  0  0 ]
-    # [ 0  0  0 ]
+    # Station Rotation (Earth Fixed Frame to Inertial Frame derivative)
+    # d(r_gs)/dt = Omega x r_gs
     w = OMEGA_EARTH
     
-    # GS1
+    # GS1 (Indices 9,10,11)
     A[9, 10] = -w; A[10, 9] = w
-    # GS2
+    # GS2 (Indices 12,13,14)
     A[12, 13] = -w; A[13, 12] = w
-    # GS3
+    # GS3 (Indices 15,16,17)
     A[15, 16] = -w; A[16, 15] = w
 
     return A

@@ -8,7 +8,7 @@ def convert_txt_to_csv(input_filename, output_filename):
             writer = csv.writer(outfile)
             
             # Write the specific header requested
-            header = ['Time(s)', 'Range(km)', 'Range_Rate(km/s)', 'Station_ID']
+            header = ['Time(s)', 'Range(m)', 'Range_Rate(m/s)', 'Station_ID']
             writer.writerow(header)
             
             # Process the text file line by line
@@ -31,13 +31,9 @@ def convert_txt_to_csv(input_filename, output_filename):
                     station_id = parts[1] # Keep as string or int
                     range_m = float(parts[2])
                     range_rate_ms = float(parts[3])
-                    
-                    # Convert Units: Meters -> Kilometers (/1000)
-                    range_km = range_m / 1000.0
-                    range_rate_kms = range_rate_ms / 1000.0
-                    
+                                        
                     # Write row in the new order: Time, Range, Range_Rate, Station_ID
-                    writer.writerow([time_val, range_km, range_rate_kms, station_id])
+                    writer.writerow([time_val, range_m, range_rate_ms, station_id])
                     
                 except ValueError:
                     print(f"Skipping malformed line: {line.strip()}")
