@@ -74,7 +74,7 @@ def post_process(results, obs, options):
             results_dict['state_errors'] = np.array([])
 
     # 4. Trigger Plots based on Options
-    if options.get('plot_state_errors', False) and len(results_dict['state_errors']) > 0:
+    if options.get('plot_state_errors', False):
         plot_state_errors(results_dict)
 
     if options.get('plot_state_deviation', False):
