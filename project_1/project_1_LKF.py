@@ -81,8 +81,8 @@ coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
 # Set LKF options
 options = {
     'coeffs': coeffs,
-    'abs_tol': 1e-10,
-    'rel_tol': 1e-10
+    'abs_tol': 1e-12,
+    'rel_tol': 1e-12
 }
 
 lkf_filter = LKF(n_states=18, station_map={101:0, 337:1, 394:2})
@@ -90,60 +90,55 @@ lkf_filter = LKF(n_states=18, station_map={101:0, 337:1, 394:2})
 # ============================================================
 # Iterative LKF Loop
 # ============================================================
-num_iterations = 15
+num_iterations_max = 20
+tol = 1e-3
 results = None
 
+# Initialize storage
+rms_hist = []
+results = None
+current_x0_dev = np.zeros(18)
+
 print(f"{'='*60}")
-print(f"Starting Iterative LKF ({num_iterations} iterations)")
+print(f"Starting Iterative LKF ({num_iterations_max} iterations)")
 print(f"{'='*60}")
 
-for i in range(num_iterations):
-    print(f"\n--- Iteration {i+1} / {num_iterations} ---")
-    
-    # 1. Reset Deviation Estimate to Zero
-    # (Since we absorbed the previous deviation into current_X0)
-    current_x0_dev = np.zeros(18)
-    
-    # 2. Reset Covariance (Optional: Keep it if you want to tighten, 
-    # but strictly for relinearization we often reset P0 to the a priori 
-    # covariance around the new linearization point)
-    current_P0 = P0_diag.copy()
+for i in range(num_iterations_max):
+    print(f"\n--- Iteration {i+1} / {num_iterations_max} ---")
 
-    # 3. Run LKF
-    results = lkf_filter.run(obs, current_X0, current_x0_dev, current_P0, Rk, Q, options)
+    # Run LKF
+    results = lkf_filter.run(obs, current_X0, current_x0_dev, P0_diag, Rk, Q, options)
     
-    # 4. Extract Final Estimated State (Reference + Deviation) at t_end
-    # results.state_hist is shape (N, 18)
-    X_end_est = results.state_hist[-1]
-    t_end = time_eval[-1]
-    
-    # 5. Back-Propagate to t=0 to update Initial Conditions
-    # We need to construct the augmented state for the integrator (18 state + 18x18 STM)
-    # The STM part doesn't matter for the trajectory back-prop, so we just use identity.
-    phi_dummy = np.eye(18).flatten()
-    X_end_augmented = np.concatenate([X_end_est, phi_dummy])
-    
-    print("   Back-propagating final estimate to update X0...")
-    
-    sol_back = solve_ivp(
-        stm_eom_mu_j2_drag,
-        (t_end, 0),  # Integrate backwards from End to Start
-        X_end_augmented,
-        rtol=options['abs_tol'],
-        atol=options['rel_tol']
-    )
-    
-    # The new best estimate for X0 is the end of the backward integration
-    new_X0 = sol_back.y[0:18, -1]
-    
-    # 6. Calculate and Print Convergence Delta (Position update magnitude)
-    delta_pos = np.linalg.norm(new_X0[0:3] - current_X0[0:3])
-    delta_vel = np.linalg.norm(new_X0[3:6] - current_X0[3:6])
-    
-    print(f"   Update delta: Pos: {delta_pos:.6f} m | Vel: {delta_vel:.6f} m/s")
-    
-    # Update for next loop
-    current_X0 = new_X0
+    # Compute RMS of Post-Fit Residuals
+    postfit_residuals = results.postfit_residuals
+    rms_range = np.sqrt(np.mean(postfit_residuals[:,0]**2))
+    rms_range_rate = np.sqrt(np.mean(postfit_residuals[:,1]**2))
+  
+    # Store RMS
+    rms_hist.append((rms_range, rms_range_rate))
+
+    # Print RMS
+    print(f"   Post-Fit Residuals RMS: Range: {rms_range:.6f} m | Range-Rate: {rms_range_rate:.6f} m/s")
+
+    # Check for convergence
+    if rms_range < tol and rms_range_rate < tol:
+        print("   Convergence criteria met. Stopping iterations.")
+        break
+
+    # Set up for next iteration
+    x_est_final = results.dx_hist[-1]
+    X_state_final = results.state_hist[-1]
+
+    # Extract final STM
+    phi_final = results.phi_hist[-1].reshape((18, 18))
+
+    # Back-propagate to get initial deviation and state
+    x0_init_est = np.linalg.inv(phi_final) @ x_est_final
+    current_X0 = current_X0 + x0_init_est
+
+    # Print
+    print(f"   Updating Initial State Deviation for Next Iteration.")
+
 
 # ============================================================
 # Post Processing (On the final iteration results)
@@ -152,9 +147,37 @@ print(f"\n{'='*60}")
 print("Iterations Complete. Running Post-Processing...")
 print(f"{'='*60}")
 
+# 1. Recover the "Best Estimate" at t0
+# current_X0 has been updated in the loop to become the converged state.
+X0_best_estimate = current_X0 
+
+# 2. Re-construct the Original Guess (A Priori)
+# (Ideally, save this to a variable before the loop starts, e.g., X0_apriori)
+X0_apriori = np.concatenate([
+    r0, v0, [MU_EARTH, J2, 2.0],
+    get_initial_station_eci(gs101_ecef),
+    get_initial_station_eci(gs337_ecef),
+    get_initial_station_eci(gs394_ecef)
+])
+
+# 3. Compute Total Deviation (The "Batch" Equivalent Result)
+total_deviation_t0 = X0_best_estimate - X0_apriori
+
+print("\nFinal Estimated State Deviation (at t0):")
+state_labels = ['x (m)', 'y (m)', 'z (m)', 'vx (m/s)', 'vy (m/s)', 'vz (m/s)',
+                'mu (m^3/s^2)', 'J2', 'Cd',
+                'GS1_x (m)', 'GS1_y (m)', 'GS1_z (m)',
+                'GS2_x (m)', 'GS2_y (m)', 'GS2_z (m)',
+                'GS3_x (m)', 'GS3_y (m)', 'GS3_z (m)']
+
+for label, value in zip(state_labels, total_deviation_t0):
+    print(f"   {label}: {value:.6e}")
+
+
 post_options = {
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 50,
+    'data_mask_idx': 0,
+    'results_units': 'm', # 'm or 'km'
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,
     'plot_prefit_residuals': True,

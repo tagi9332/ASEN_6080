@@ -239,7 +239,13 @@ def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     # [m^2 / kg]
     drag_b_term = (cd * area) / mass 
     
-    # Calculate Accelerations
+    # Compute relative velocities
+    vx_rel = vx - (-OMEGA_EARTH * y)
+    vy_rel = vy - ( OMEGA_EARTH * x)
+    vz_rel = vz
+
+    v_rel_sq = vx_rel**2 + vy_rel**2 + vz_rel**2
+    v_rel = np.sqrt(v_rel_sq)
     
     # Common J2 Terms
     ri_r_sq = (R_EARTH / r_mag)**2
@@ -253,12 +259,11 @@ def orbit_eom_mu_j2_drag(t, state, area=3.0, mass=970.0):
     # Drag Force per unit mass = 0.5 * rho * v^2 * (Cd*A/m) * (v_vec / v)
     # Simplifies to: 0.5 * rho * v * (Cd*A/m) * v_vec
     # Units: [kg/m^3] * [m/s] * [m^2/kg] * [m/s] = [m/s^2] -> OK
-    drag_factor = 0.5 * rho * drag_b_term * v_mag
+    drag_factor = 0.5 * rho * drag_b_term * v_rel
     
-    ax = -(mu_r3 * x) * j2_factor_x_y - drag_factor * vx
-    ay = -(mu_r3 * y) * j2_factor_x_y - drag_factor * vy
-    az = -(mu_r3 * z) * j2_factor_z   - drag_factor * vz
-
+    ax = -(mu_r3 * x) * j2_factor_x_y - drag_factor * vx_rel
+    ay = -(mu_r3 * y) * j2_factor_x_y - drag_factor * vy_rel
+    az = -(mu_r3 * z) * j2_factor_z   - drag_factor * vz_rel
     # Calculate station velocities (Earth Rotation)
     w_earth = np.array([0, 0, OMEGA_EARTH])
     
@@ -321,6 +326,10 @@ def compute_jacobian_18x18(state):
     Computes 18x18 Jacobian for Orbital Dynamics in METERS.
     State: [x, y, z, vx, vy, vz, mu, J2, Cd, GS1(3), GS2(3), GS3(3)]
     """
+
+    # Ensure parameters are imported
+    from resources.constants import R_EARTH, OMEGA_EARTH, H
+
     # 1. Extract State
     x, y, z = state[0], state[1], state[2]
     vx, vy, vz = state[3], state[4], state[5]
@@ -338,11 +347,17 @@ def compute_jacobian_18x18(state):
     r_sq = x**2 + y**2 + z**2
     r = np.sqrt(r_sq)
     
-    v_sq = vx**2 + vy**2 + vz**2
-    v = np.sqrt(v_sq)
+    # Compute relative velocity magnitude
+    w = OMEGA_EARTH
+
+    vx_rel = vx - (-w * y)
+    vy_rel = vy - ( w * x)
+    vz_rel = vz - 0.0
+
+    vrel_sq = vx_rel**2 + vy_rel**2 + vz_rel**2
+    v_rel = np.sqrt(vrel_sq)
 
     # Compute Atmospheric Density [kg/m^3]
-    # NOTE: Ensure this function accepts Meters and returns kg/m^3
     rho = compute_atm_rho(r) 
 
     # Ballistic Coefficient (1/2 * Cd * A / m) [m^2/kg]
@@ -357,7 +372,7 @@ def compute_jacobian_18x18(state):
         d_rho_dr = 0.0
 
     # Common Drag Gradient Term: B_star * d_rho/dr * v
-    atmos_grad_pre = B_star * d_rho_dr * v 
+    atmos_grad_pre = B_star * d_rho_dr * v_rel 
     
     # --- BLOCK 1: d(Acc)/d(Pos) ---
     r5, r7, r9 = r**5, r**7, r**9
@@ -369,7 +384,7 @@ def compute_jacobian_18x18(state):
         ((Ri2 * J2_curr) / 2) * ( (15*(x**2 + z**2)/r7) - ((105*x**2*z**2)/r9) - (3/r5) ) 
     )
     # Drag: d(a_drag)/dx = d(a)/d(rho) * d(rho)/dr * dr/dx
-    term_drag_x = atmos_grad_pre * vx * (x/r)
+    term_drag_x = atmos_grad_pre * vx_rel * (x/r)
     delXddDelX = term_grav_x + term_drag_x
 
     # X-Y Cross Terms
@@ -377,7 +392,7 @@ def compute_jacobian_18x18(state):
         ((3*x*y)/r5) - 
         ((Ri2 * J2_curr * x * y) / 2) * ((15/r7) - ((105*z**2)/r9)) 
     )
-    term_drag_xy = atmos_grad_pre * vx * (y/r)
+    term_drag_xy = atmos_grad_pre * vx_rel * (y/r)
     delXddDelY = term_grav_xy + term_drag_xy
 
     # X-Z Cross Terms
@@ -385,35 +400,35 @@ def compute_jacobian_18x18(state):
         ((3*x*z)/r5) - 
         ((Ri2 * J2_curr * x * z) / 2) * ((45/r7) - ((105*z**2)/r9)) 
     )
-    term_drag_xz = atmos_grad_pre * vx * (z/r)
+    term_drag_xz = atmos_grad_pre * vx_rel * (z/r)
     delXddDelZ = term_grav_xz + term_drag_xz
 
     # Y-Row Gradients
-    delYddDelX = term_grav_xy + atmos_grad_pre * vy * (x/r)
+    delYddDelX = term_grav_xy + atmos_grad_pre * vy_rel * (x/r)
     
     term_grav_y = -mu * ( 
         ((r_sq - 3*y**2)/r5) + 
         ((Ri2 * J2_curr) / 2) * ( (15*(y**2 + z**2)/r7) - ((105*y**2*z**2)/r9) - (3/r5) ) 
     )
-    term_drag_y = atmos_grad_pre * vy * (y/r)
+    term_drag_y = atmos_grad_pre * vy_rel * (y/r)
     delYddDelY = term_grav_y + term_drag_y
 
     term_grav_yz = mu * ( 
         ((3*y*z)/r5) - 
         ((Ri2 * J2_curr * y * z) / 2) * ((45/r7) - ((105*z**2)/r9)) 
     )
-    term_drag_yz = atmos_grad_pre * vy * (z/r)
+    term_drag_yz = atmos_grad_pre * vy_rel * (z/r)
     delYddDelZ = term_grav_yz + term_drag_yz
 
     # Z-Row Gradients
-    delZddDelX = term_grav_xz + atmos_grad_pre * vz * (x/r)
-    delZddDelY = term_grav_yz + atmos_grad_pre * vz * (y/r)
+    delZddDelX = term_grav_xz + atmos_grad_pre * vz_rel * (x/r)
+    delZddDelY = term_grav_yz + atmos_grad_pre * vz_rel * (y/r)
     
     term_grav_z = -mu * ( 
         ((r_sq - 3*z**2)/r5) + 
         ((Ri2 * J2_curr) / 2) * ( (90*z**2/r7) - ((105*z**4)/r9) - (9/r5) ) 
     )
-    term_drag_z = atmos_grad_pre * vz * (z/r)
+    term_drag_z = atmos_grad_pre * vz_rel * (z/r)
     delZddDelZ = term_grav_z + term_drag_z
 
     # --- BLOCK 2: d(Acc)/d(Vel) ---
@@ -421,17 +436,17 @@ def compute_jacobian_18x18(state):
     # This requires derivative of (v * v_vec)
     C = -B_star * rho 
     
-    delXddDelXd = C * ((vx**2 / v) + v)
-    delXddDelYd = C * (vx * vy / v)
-    delXddDelZd = C * (vx * vz / v)
+    delXddDelXd = C * ((vx_rel**2 / v_rel) + v_rel)
+    delXddDelYd = C * (vx_rel * vy_rel / v_rel)
+    delXddDelZd = C * (vx_rel * vz_rel / v_rel)
 
-    delYddDelXd = C * (vy * vx / v)
-    delYddDelYd = C * ((vy**2 / v) + v)
-    delYddDelZd = C * (vy * vz / v)
+    delYddDelXd = C * (vy_rel * vx_rel / v_rel)
+    delYddDelYd = C * ((vy_rel**2 / v_rel) + v_rel)
+    delYddDelZd = C * (vy_rel * vz_rel / v_rel)
 
-    delZddDelXd = C * (vz * vx / v)
-    delZddDelYd = C * (vz * vy / v)
-    delZddDelZd = C * ((vz**2 / v) + v)
+    delZddDelXd = C * (vz_rel * vx_rel / v_rel)
+    delZddDelYd = C * (vz_rel * vy_rel / v_rel)
+    delZddDelZd = C * ((vz_rel**2 / v_rel) + v_rel)
 
     # --- BLOCK 3: d(Acc)/d(Params) ---
     
@@ -455,10 +470,10 @@ def compute_jacobian_18x18(state):
     # a_drag = -0.5 * (Cd * A / m) * rho * v * vec(v)
     # d(a)/dCd = a_drag / Cd
     # In METERS, no unit conversion needed.
-    cd_common = -0.5 * (Asc / m_sat) * rho * v
-    delXddDelCd = cd_common * vx
-    delYddDelCd = cd_common * vy
-    delZddDelCd = cd_common * vz
+    cd_common = -0.5 * (Asc / m_sat) * rho * v_rel
+    delXddDelCd = cd_common * vx_rel
+    delYddDelCd = cd_common * vy_rel
+    delZddDelCd = cd_common * vz_rel
 
     # --- ASSEMBLE MATRIX ---
     A = np.zeros((18, 18))

@@ -4,67 +4,97 @@ import matplotlib.pyplot as plt
 def plot_state_errors(results_dict, n_sigma=3):
     """
     Plot state estimation errors with n-sigma bounds.
-    Automatically scales y-axis to km, m, or mm based on error magnitude.
-    Assumes input units are km and km/s.
+    
+    - Handles 'results_units' flag (m vs km).
+    - Auto-scales y-axis (e.g., if user asks for 'km' but errors are 'mm', it switches to 'mm').
+    - Assumes raw input data in results_dict is in METERS and METERS/S.
     """
-    if results_dict['state_errors'].size == 0:
-        print("No state errors available for plotting.")
-        times = results_dict['times']
+    
+    # --- 1. Safety Check: Ensure data exists ---
+    state_errors = results_dict.get('state_errors')
+    if state_errors is None or state_errors.size == 0:
+        print("[Plotting] No state errors available (truth data might be missing). Skipping plot.")
+        return
+
+    # --- 2. Setup Data & Units ---
+    times = results_dict['times']
+    P_hist = results_dict['cov_hist']  # Ensure key matches your dict ('cov_hist' or 'P_hist')
+    
+    # Calculate sigmas (Sqrt of diagonal variances)
+    # Assumed input: Meters and Meters/s
+    sigmas = np.sqrt(np.diagonal(P_hist, axis1=1, axis2=2))
+    
+    state_names = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+    
+    # Get user preference ('m' or 'km')
+    unit_pref = results_dict.get('options', {}).get('results_units', 'm')
+    
+    # Define Base Scaling based on preference
+    # If user wants km, we pre-scale everything by 1e-3
+    if unit_pref == 'km':
+        base_scale = 1e-3
+        pos_base_unit = 'km'
+        vel_base_unit = 'km/s'
+    else:
+        base_scale = 1.0
+        pos_base_unit = 'm'
+        vel_base_unit = 'm/s'
+
+    # --- 3. Plotting Loop ---
+    fig, axes = plt.subplots(3, 2, figsize=(12, 10), sharex=True)
+    axes = axes.flatten()
+    fig.suptitle(f'Linearized Kalman Filter State Estimation Errors ({n_sigma}$\sigma$)', fontsize=16)
+
+    for i in range(6):
+        # Extract raw data (Meters) and apply User Preference (m or km)
+        # raw_error_base is now in the user's preferred unit
+        raw_error_base = state_errors[:, i] * base_scale
+        raw_bound_base = n_sigma * sigmas[:, i] * base_scale
         
-        # Calculate sigmas from Covariance (assumed km^2 and km^2/s^2)
-        sigmas = np.array([np.sqrt(np.diag(P)) for P in results_dict['P_hist']])
+        # Determine unit label for this specific axis
+        is_velocity = i >= 3
+        current_unit = vel_base_unit if is_velocity else pos_base_unit
         
-        state_names = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+        # --- 4. Auto-Scaling Logic ---
+        # If the max error is tiny in the chosen unit, scale down further for readability
+        max_val = np.max(np.abs(raw_bound_base))
         
-        fig, axes = plt.subplots(3, 2, figsize=(12, 10), sharex=True)
-        axes = axes.flatten()
-        fig.suptitle(f'Linearized Kalman Filter State Estimation Errors ({n_sigma}$\sigma$)', fontsize=16)
+        scale_display = 1.0
+        unit_label = current_unit
+        
+        # Logic: If max value is < 0.1 of the base unit, drop down a metric prefix
+        if max_val > 0: # Avoid div by zero
+            if max_val < 1e-3: 
+                # e.g., have km, need mm OR have m, need mm
+                scale_display = 1e6 if unit_pref == 'km' else 1e3
+                unit_label = current_unit.replace('km', 'mm').replace('m', 'mm')
+            elif max_val < 1.0:
+                # e.g., have km, need m
+                if unit_pref == 'km':
+                    scale_display = 1e3
+                    unit_label = current_unit.replace('km', 'm')
 
-        for i in range(6):
-            # Extract raw data (assumed km or km/s)
-            raw_error = results_dict['state_errors'][:, i]
-            raw_bound = n_sigma * sigmas[:, i]
-            
-            # Determine max value to select scale
-            # We look at the bounds max to ensure the red lines fit in the unit choice
-            max_val = np.max(raw_bound)
-            
-            # Determine Unit and Scale Factor
-            is_velocity = i >= 3
-            base_unit = "km/s" if is_velocity else "km"
-            
-            if max_val >= 1.0:
-                scale_factor = 1.0
-                unit_label = base_unit
-            elif max_val >= 1e-3:
-                scale_factor = 1e3
-                unit_label = base_unit.replace("km", "m") # m or m/s
-            else:
-                scale_factor = 1e6
-                unit_label = base_unit.replace("km", "mm") # mm or mm/s
+        # Apply final display scaling
+        final_error = raw_error_base * scale_display
+        final_bound = raw_bound_base * scale_display
 
-            # Apply Scale
-            scaled_error = raw_error * scale_factor
-            scaled_bound = raw_bound * scale_factor
-            
-            # Plotting
-            axes[i].scatter(times, scaled_error, c='b', label='Error', s=2, zorder=3)
-            axes[i].plot(times, scaled_bound, 'r--', alpha=0.7, label=fr'{n_sigma}$\sigma$')
-            axes[i].plot(times, -scaled_bound, 'r--', alpha=0.7)
-            
-            axes[i].set_ylabel(f'{state_names[i]} ({unit_label})')
-            axes[i].set_title(f'State Error: {state_names[i]}')
-            axes[i].grid(True, linestyle=':', alpha=0.6)
-            
-            # Only add legend to the first plot to avoid clutter
-            if i == 0:
-                axes[i].legend(loc='upper right')
+        # --- 5. Draw Plot ---
+        axes[i].scatter(times, final_error, c='b', label='Error', s=2, zorder=3)
+        axes[i].plot(times, final_bound, 'r--', alpha=0.7, label=fr'{n_sigma}$\sigma$')
+        axes[i].plot(times, -final_bound, 'r--', alpha=0.7)
+        
+        axes[i].set_ylabel(f'{state_names[i]} ({unit_label})')
+        axes[i].set_title(f'State Error: {state_names[i]}')
+        axes[i].grid(True, linestyle=':', alpha=0.6)
+        
+        if i == 1: # Legend on top-right plot
+            axes[i].legend(loc='upper right')
 
-        plt.xlabel('Time (s)')
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.92) # Make room for suptitle
+    plt.xlabel('Time (s)')
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
 
-        # Save to file
-        save_folder = results_dict.get('save_folder', '.')
-        plt.savefig(f"{save_folder}/state_errors.png", dpi=300)
-        plt.close()
+    # Save
+    save_folder = results_dict.get('save_folder', '.')
+    plt.savefig(f"{save_folder}/state_errors.png", dpi=300)
+    plt.close()

@@ -14,7 +14,8 @@ class LKFResults:
     dx_hist: Any
     P_hist: Any
     state_hist: Any
-    innovations: Any
+    phi_hist: Any
+    prefit_residuals: Any
     postfit_residuals: Any
     nis_hist: Any
 
@@ -22,7 +23,8 @@ class LKFResults:
         self.dx_hist = np.array(self.dx_hist)
         self.P_hist = np.array(self.P_hist)
         self.state_hist = np.array(self.state_hist)
-        self.innovations = np.array(self.innovations)
+        self.phi_hist = np.array(self.phi_hist)
+        self.prefit_residuals = np.array(self.prefit_residuals)
         self.postfit_residuals = np.array(self.postfit_residuals)
         self.nis_hist = np.array(self.nis_hist)
 
@@ -30,7 +32,7 @@ class LKFResults:
 # Linearized Kalman Filter
 # ============================================================
 class LKF:
-    def __init__(self, n_states: int = 18, station_map: dict = None):
+    def __init__(self, n_states: int = 18, station_map: dict = None): # type: ignore
         """
         Initializes the LKF for the 18-element Augmented State.
         State: [r_vec(3), v_vec(3), mu, J2, Cd, GS1(3), GS2(3), GS3(3)]
@@ -85,6 +87,7 @@ class LKF:
         _x = [x_0.copy()]
         _P = [P0.copy()]
         _state = [X_0.copy()]
+        _phi_hist = [np.eye(self.n)]
         _prefit_res = [np.zeros(2)]
         _postfit_res = [np.zeros(2)]
         _nis = [0.0]
@@ -176,10 +179,10 @@ class LKF:
             # NIS
             nis = innovation.T @ np.linalg.solve(S, innovation)
             
-            # State Update
+            # State Measurement Update
             x = x_pred + K @ innovation
 
-            # Covariance Update
+            # Covariance MeasurementUpdate
             IKH = self.I - K @ H
             P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
 
@@ -191,10 +194,12 @@ class LKF:
             _P.append(P.copy())
             # Store the Analytical ref + estimated deviation
             _state.append((X_ref_k_analytical + x).copy())
+            _phi_hist.append(Phi_global.copy())
             _prefit_res.append(prefit_res.copy()) # type: ignore
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis.copy())
-            
+
+            # Update Previous STM
             Phi_prev = Phi_global.copy()
 
-        return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis)
+        return LKFResults(_x, _P, _state, _phi_hist, _prefit_res, _postfit_res, _nis)

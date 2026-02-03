@@ -47,7 +47,9 @@ def post_process(results, obs, options):
     
     # Store the path in the dictionary for plotting functions to use
     results_dict['save_folder'] = save_folder
-    print(f"Output directory set to: {save_folder}")
+
+    # Store units flag in results_dict
+    results_dict['results_units'] = options.get('results_units', 'km')  #
 
 # 3. Compute state errors against truth (if file provided)
     if 'truth_traj_file' in options:
@@ -100,6 +102,8 @@ def post_process(results, obs, options):
 
     # Print Completion Message
     print("Post-processing and plotting completed.")
+    print(f"Output directory saved to: {save_folder}")
+
 
     return results_dict
 

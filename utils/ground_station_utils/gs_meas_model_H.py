@@ -173,12 +173,7 @@ def compute_H_tilde_18_state(state, stat_idx, meas_include=[True, True]):
             # 1. Range w.r.t Station Position
             # d(rho)/d(rs) = - d(rho)/d(r) = -rho_vec / rho
             d_rho_drs = -rho_vec / rho
-            
-            # 2. Range Rate w.r.t Station Position
-            # This is complex because d(vs)/d(rs) is not zero (vs = w x rs)
-            # The MATLAB formula: ((rho^2)*(wTilde*R - V) + rhoVec'*(V - wTilde*Rs)*rhoVec)/rho^3
-            # Note: MATLAB's derivation simplifies d(vs)/d(rs) into the wTilde terms.
-            
+                    
             term1 = (rho**2) * (np.dot(w_tilde, r_vec) - v_vec)
             
             # (V - wTilde*Rs) is effectively (V - Vs) = V_rel
