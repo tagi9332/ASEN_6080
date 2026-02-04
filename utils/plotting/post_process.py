@@ -12,6 +12,7 @@ from utils.plotting.plot_covariance_trace import plot_covariance_trace
 from utils.plotting.plot_filter_consistency import plot_filter_consistency
 from utils.plotting.plot_nis_metric import plot_nis_metric
 from utils.plotting.report_RMS_error import report_filter_metrics
+from utils.plotting.plot_covariance_ellipsoid import plot_covariance_ellipsoid
 
 
 
@@ -99,6 +100,9 @@ def post_process(results, obs, options):
 
     if options.get('plot_nis_metric', False):
         plot_nis_metric(results_dict)
+
+    if options.get('plot_covariance_ellipsoid', False):
+        plot_covariance_ellipsoid(results_dict)
 
     # Print Completion Message
     print("Post-processing and plotting completed.")

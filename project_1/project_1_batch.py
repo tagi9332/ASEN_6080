@@ -13,15 +13,7 @@ from resources.constants import MU_EARTH, J2, OMEGA_EARTH
 # CHANGE 1: Import the BatchLS class instead of LKF
 from utils.filters.batch_class_project_1 import BatchLS 
 from utils.plotting.post_process import post_process
-
-# ============================================================
-# Helper Functions
-# ============================================================
-def get_initial_station_eci(station_ecef, t_offset=0):
-    theta = OMEGA_EARTH * t_offset
-    c, s = np.cos(theta), np.sin(theta)
-    R_ecef2eci = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
-    return R_ecef2eci @ station_ecef
+from utils.ground_station_utils.get_initial_station_eci import get_initial_station_eci
 
 # ============================================================
 # Main Execution
@@ -66,7 +58,7 @@ obs = pd.read_csv(fr'data\project_1_obs.csv')
 # 5. Configure Filter Options
 # CHANGE 2: Batch-specific options
 options = {
-    'max_iterations': 10,     # The loop is now internal to the class
+    'max_iterations': 1,     # The loop is now internal to the class
     'convergence_tol': 1e-3,  # Stop if dx_0 updates are smaller than this
     'abs_tol': 1e-12,         # Integrator tolerance
     'rel_tol': 1e-12
@@ -105,7 +97,15 @@ state_labels = ['x (m)', 'y (m)', 'z (m)', 'vx (m/s)', 'vy (m/s)', 'vz (m/s)',
 
 print("\nFinal Estimated State Deviation (at t0):")
 for label, value in zip(state_labels, final_deviation):
-    print(f"   {label}: {value:.6e}")
+    print(f"   {label}: {value:4.5f}")
+
+
+# Compute r and v norm deviations
+r_dev = final_deviation[0:3]
+v_dev = final_deviation[3:6]
+total_deviation_t0 = np.concatenate([r_dev, v_dev])
+print(f"\nTotal Position Deviation Magnitude at t0: {np.linalg.norm(r_dev):.6f} m")
+print(f"Total Velocity Deviation Magnitude at t0: {np.linalg.norm(v_dev):.6f} m/s")
 
 post_options = {
     'save_to_timestamped_folder': True,
@@ -116,7 +116,8 @@ post_options = {
     'plot_prefit_residuals': True,  # Will plot (Initial_Guess_Residuals)
     'plot_residual_comparison': True,
     'plot_covariance_trace': True,
-    'plot_nis_metric': True
+    'plot_nis_metric': True,
+    'plot_covariance_ellipsoid': True
 }
 
 post_process(results, obs, post_options)

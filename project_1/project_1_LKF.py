@@ -1,7 +1,6 @@
 import os, sys
 import numpy as np
 import pandas as pd
-from scipy.integrate import solve_ivp # Needed for back-propagation
 
 # ============================================================
 # Imports & Constants
@@ -10,29 +9,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Local Imports
 from resources.constants import MU_EARTH, J2, OMEGA_EARTH
-from utils.filters.lkf_class_project_1 import LKF
+from utils.filters.lkf_class_project_1_potter import LKF
 from utils.plotting.post_process import post_process
-from utils.zonal_harmonics.zonal_harmonics import stm_eom_mu_j2_drag
-
-# ============================================================
-# Helper Functions
-# ============================================================
-def get_initial_station_eci(station_ecef, t_offset=0):
-    """
-    Rotates ECEF coordinates to ECI based on the problem's theta formula.
-    theta = omega_earth * t
-    """
-    theta = OMEGA_EARTH * t_offset
-    c = np.cos(theta)
-    s = np.sin(theta)
-    
-    R_ecef2eci = np.array([
-        [c, -s, 0],
-        [s,  c, 0],
-        [0,  0, 1]
-    ])
-    
-    return R_ecef2eci @ station_ecef
+from utils.ground_station_utils.get_initial_station_eci import get_initial_station_eci
+from project_1.run_iterative_LKF import run_iterative_LKF
 
 # ============================================================
 # Main Execution
@@ -87,58 +67,10 @@ options = {
 
 lkf_filter = LKF(n_states=18, station_map={101:0, 337:1, 394:2})
 
-# ============================================================
-# Iterative LKF Loop
-# ============================================================
-num_iterations_max = 20
-tol = 1e-3
-results = None
 
-# Initialize storage
-rms_hist = []
-results = None
-current_x0_dev = np.zeros(18)
-
-print(f"{'='*60}")
-print(f"Starting Iterative LKF ({num_iterations_max} iterations)")
-print(f"{'='*60}")
-
-for i in range(num_iterations_max):
-    print(f"\n--- Iteration {i+1} / {num_iterations_max} ---")
-
-    # Run LKF
-    results = lkf_filter.run(obs, current_X0, current_x0_dev, P0_diag, Rk, Q, options)
-    
-    # Compute RMS of Post-Fit Residuals
-    postfit_residuals = results.postfit_residuals
-    rms_range = np.sqrt(np.mean(postfit_residuals[:,0]**2))
-    rms_range_rate = np.sqrt(np.mean(postfit_residuals[:,1]**2))
-  
-    # Store RMS
-    rms_hist.append((rms_range, rms_range_rate))
-
-    # Print RMS
-    print(f"   Post-Fit Residuals RMS: Range: {rms_range:.6f} m | Range-Rate: {rms_range_rate:.6f} m/s")
-
-    # Check for convergence
-    if rms_range < tol and rms_range_rate < tol:
-        print("   Convergence criteria met. Stopping iterations.")
-        break
-
-    # Set up for next iteration
-    x_est_final = results.dx_hist[-1]
-    X_state_final = results.state_hist[-1]
-
-    # Extract final STM
-    phi_final = results.phi_hist[-1].reshape((18, 18))
-
-    # Back-propagate to get initial deviation and state
-    x0_init_est = np.linalg.inv(phi_final) @ x_est_final
-    current_X0 = current_X0 + x0_init_est
-
-    # Print
-    print(f"   Updating Initial State Deviation for Next Iteration.")
-
+# Run LKF iteration loop
+results, final_X0_est = run_iterative_LKF(lkf_filter, obs, current_X0, P0_diag, Rk, Q, options,
+                            num_iterations_max=3, tol=1e-3)
 
 # ============================================================
 # Post Processing (On the final iteration results)
@@ -147,9 +79,7 @@ print(f"\n{'='*60}")
 print("Iterations Complete. Running Post-Processing...")
 print(f"{'='*60}")
 
-# 1. Recover the "Best Estimate" at t0
-# current_X0 has been updated in the loop to become the converged state.
-X0_best_estimate = current_X0 
+X0_best_estimate = final_X0_est
 
 # 2. Re-construct the Original Guess (A Priori)
 # (Ideally, save this to a variable before the loop starts, e.g., X0_apriori)
@@ -171,7 +101,7 @@ state_labels = ['x (m)', 'y (m)', 'z (m)', 'vx (m/s)', 'vy (m/s)', 'vz (m/s)',
                 'GS3_x (m)', 'GS3_y (m)', 'GS3_z (m)']
 
 for label, value in zip(state_labels, total_deviation_t0):
-    print(f"   {label}: {value:.6e}")
+    print(f"   {label}: {value:4.6f}")
 
 
 post_options = {
@@ -183,7 +113,8 @@ post_options = {
     'plot_prefit_residuals': True,
     'plot_residual_comparison': True,
     'plot_covariance_trace': True,
-    'plot_nis_metric': True
+    'plot_nis_metric': True,
+    'plot_covariance_ellipsoid': True
 }
 
 post_process(results, obs, post_options)
