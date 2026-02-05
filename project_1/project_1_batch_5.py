@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from resources.constants import MU_EARTH, J2, OMEGA_EARTH
 # 
 # CHANGE 1: Import the BatchLS class instead of LKF
-from utils.filters.batch_class_project_1 import BatchLS 
+from utils.filters.batch_class_project_1_5 import BatchLS 
 from utils.plotting.post_process import post_process
 from utils.ground_station_utils.get_initial_station_eci import get_initial_station_eci
 
@@ -70,11 +70,38 @@ print(f"{'='*60}")
 print(f"Starting Batch Least Squares Processing")
 print(f"{'='*60}")
 
+Rk_full = np.diag([1e-4, 1e-6]) 
+
 # Instantiate
 batch_filter = BatchLS(n_states=18, station_map={101:0, 337:1, 394:2})
 
-# CHANGE 3: Run once (The class handles the iteration loop)
-results = batch_filter.run(obs, X_0_apriori, P0_apriori, Rk, options)
+# ============================================================
+# Scenario A: Range Only
+# ============================================================
+print("\n--- RUNNING BATCH: RANGE ONLY ---")
+
+# 1. Drop Range Rate column (Forces class to detect Index 0 only)
+obs_range_only = obs.drop(columns=['Range_Rate(m/s)']).dropna(subset=['Range(m)'])
+
+# 2. Pass the FULL Rk matrix. 
+#    The class detects "Range Only" (Index 0) and slices Rk_full to get [[1e-4]]
+results_range = batch_filter.run(obs_range_only, X_0_apriori, P0_apriori, Rk_full, options)
+
+post_process(results_range, obs_range_only, options)
+
+# ============================================================
+# Scenario B: Range-Rate Only
+# ============================================================
+print("\n--- RUNNING BATCH: RANGE-RATE ONLY ---")
+
+# 1. Drop Range column (Forces class to detect Index 1 only)
+obs_rate_only = obs.drop(columns=['Range(m)']).dropna(subset=['Range_Rate(m/s)'])
+
+# 2. Pass the FULL Rk matrix.
+#    The class detects "Rate Only" (Index 1) and slices Rk_full to get [[1e-6]]
+results_rate = batch_filter.run(obs_rate_only, X_0_apriori, P0_apriori, Rk_full, options)
+
+post_process(results_rate, obs_rate_only, options)
 
 # ============================================================
 # Post Processing
@@ -86,7 +113,7 @@ print(f"{'='*60}")
 # Print final state deviation estimates (Converged X0 - Original X0)
 # The BatchLS class stores this in the first element of dx_hist if you want t0, 
 # or we can just look at the last state deviation.
-final_state_vector = results.state_hist[0] # State at t=0 after convergence
+final_state_vector = results_range.state_hist[0] # State at t=0 after convergence
 final_deviation = final_state_vector - X_0_apriori
 
 state_labels = ['x (m)', 'y (m)', 'z (m)', 'vx (m/s)', 'vy (m/s)', 'vz (m/s)',
@@ -111,13 +138,14 @@ post_options = {
     'save_to_timestamped_folder': True,
     'data_mask_idx': 0,
     'results_units': 'm', 
-    'plot_state_deviation': True,   # Will plot (Converged_Trajectory - Initial_Guess)
+    'plot_state_deviation': True,  
     'plot_postfit_residuals': True,
-    'plot_prefit_residuals': True,  # Will plot (Initial_Guess_Residuals)
+    'plot_prefit_residuals': True,
     'plot_residual_comparison': True,
     'plot_covariance_trace': True,
     'plot_nis_metric': True,
     'plot_covariance_ellipsoid': True
 }
 
-post_process(results, obs, post_options)
+post_process(results_range, obs_range_only, post_options)
+post_process(results_rate, obs_rate_only, post_options)

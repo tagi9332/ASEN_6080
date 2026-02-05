@@ -40,7 +40,7 @@ def plot_filter_consistency(results_dict):
     unit_pref = results_dict.get('options', {}).get('results_units', 'm')
 
     if unit_pref == 'km':
-        scale = 1e-3
+        scale = 1
         unit_label = 'km'
     else:
         scale = 1.0

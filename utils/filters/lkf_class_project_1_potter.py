@@ -31,8 +31,8 @@ class LKFResults:
 # ============================================================
 # Linearized Kalman Filter (Potter Square Root Implementation)
 # ============================================================
-class LKF:
-    def __init__(self, n_states: int = 18, station_map: dict = None):
+class LKF_potter:
+    def __init__(self, n_states: int = 18, station_map: dict = None): # type: ignore
         """
         Initializes the LKF for the 18-element Augmented State.
         State: [r_vec(3), v_vec(3), mu, J2, Cd, GS1(3), GS2(3), GS3(3)]
@@ -222,7 +222,7 @@ class LKF:
             _P.append(P.copy())
             _state.append((X_ref_k_analytical + x).copy())
             _phi_hist.append(Phi_global.copy())
-            _prefit_res.append(prefit_res_vec.copy())
+            _prefit_res.append(prefit_res_vec.copy()) # type: ignore
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis)
 

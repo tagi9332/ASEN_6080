@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Local Imports
 from resources.constants import MU_EARTH, J2, OMEGA_EARTH
-from utils.filters.lkf_class_project_1 import LKF
+from utils.filters.lkf_class_project_1_potter import LKF_potter
 from utils.plotting.post_process import post_process
 from utils.ground_station_utils.get_initial_station_eci import get_initial_station_eci
 from project_1.run_iterative_LKF import run_iterative_LKF
@@ -65,7 +65,7 @@ options = {
     'rel_tol': 1e-12
 }
 
-lkf_filter = LKF(n_states=18, station_map={101:0, 337:1, 394:2})
+lkf_filter = LKF_potter(n_states=18, station_map={101:0, 337:1, 394:2})
 
 
 # Run LKF iteration loop

@@ -23,15 +23,13 @@ gs101_ecef = np.array([-5127510.0, -3794160.0,       0.0])  # Pacific Ocean
 gs337_ecef = np.array([ 3860910.0,  3238490.0, 3898094.0])  # Pirinclik
 gs394_ecef = np.array([  549505.0, -1380872.0, 6182197.0])  # Thule
 
-# Initial State Deviation & Covariances
-# Note: x_0 is the deviation. We reset this to 0 at the start of every iteration
-# because we update the reference X_0 instead.
+# Initial State Deviation & Covariances (No stations fixed)
 P0_diag = np.diag([
     1e6, 1e6, 1e6, 1e6, 1e6, 1e6,   
     1e20,                           
     1e6, 1e6,                       
-    1e-10, 1e-10, 1e-10,            
-    1e6, 1e6, 1e6, 1e6, 1e6, 1e6    
+    1e6, 1e6, 1e6,            
+    1e6, 1e6, 1e6, 1e-10, 1e-10, 1e-10    
 ])
 
 Rk = np.diag([1e-4, 1e-6])  # Measurement noise covariance [Range, Range-Rate]

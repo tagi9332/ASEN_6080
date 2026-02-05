@@ -24,13 +24,12 @@ gs101_ecef = np.array([-5127510.0, -3794160.0,       0.0])
 gs337_ecef = np.array([ 3860910.0,  3238490.0, 3898094.0])
 gs394_ecef = np.array([  549505.0, -1380872.0, 6182197.0])
 
-# 2. Setup Covariances
-# A Priori Covariance (P_bar) - same as your P0
-P0_apriori = np.diag([
+# Initial State Deviation & Covariances (No stations fixed)
+P0 = np.diag([
     1e6, 1e6, 1e6, 1e6, 1e6, 1e6,   
     1e20,                           
     1e6, 1e6,                       
-    1e-10, 1e-10, 1e-10,            
+    1e6, 1e6, 1e6,            
     1e6, 1e6, 1e6, 1e6, 1e6, 1e6    
 ])
 
@@ -74,7 +73,7 @@ print(f"{'='*60}")
 batch_filter = BatchLS(n_states=18, station_map={101:0, 337:1, 394:2})
 
 # CHANGE 3: Run once (The class handles the iteration loop)
-results = batch_filter.run(obs, X_0_apriori, P0_apriori, Rk, options)
+results = batch_filter.run(obs, X_0_apriori, P0, Rk, options)
 
 # ============================================================
 # Post Processing

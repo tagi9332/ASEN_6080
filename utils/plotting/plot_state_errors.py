@@ -29,10 +29,9 @@ def plot_state_errors(results_dict, n_sigma=3):
     # Get user preference ('m' or 'km')
     unit_pref = results_dict.get('options', {}).get('results_units', 'm')
     
-    # Define Base Scaling based on preference
-    # If user wants km, we pre-scale everything by 1e-3
+    # Define Base Scaling based on stored data
     if unit_pref == 'km':
-        base_scale = 1e-3
+        base_scale = 1.0
         pos_base_unit = 'km'
         vel_base_unit = 'km/s'
     else:

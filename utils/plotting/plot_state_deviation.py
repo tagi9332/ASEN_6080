@@ -26,9 +26,8 @@ def plot_state_deviation(results_dict):
     unit_pref = results_dict.get('options', {}).get('results_units', 'm')
 
     # Define Base Scaling
-    # If user wants 'km', we pre-scale raw meters by 1e-3.
     if unit_pref == 'km':
-        base_scale = 1e-3
+        base_scale = 1.0
         pos_base_unit = 'km'
         vel_base_unit = 'km/s'
     else:

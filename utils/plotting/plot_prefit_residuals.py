@@ -8,15 +8,14 @@ def plot_prefit_residuals(results_dict):
     Plotting function for pre-fit residuals (innovations).
     
     - Handles 'results_units' flag (m vs km).
-    - Assumes raw residuals in results_dict are in METERS and M/S.
+    - Dynamic Layout: Plots only the measurement types (Range/Rate) that exist.
     """
     
     # --- 1. Setup Units & Scaling ---
-    # Get user preference ('m' or 'km')
     unit_pref = results_dict.get('options', {}).get('results_units', 'm')
 
     if unit_pref == 'km':
-        scale = 1e-3
+        scale = 1.0
         dist_unit = 'km'
         rate_unit = 'km/s'
     else:
@@ -24,81 +23,122 @@ def plot_prefit_residuals(results_dict):
         dist_unit = 'm'
         rate_unit = 'm/s'
 
-    # --- 2. Extract & Scale Data ---
+    # --- 2. Extract Data ---
     times = np.array(results_dict['times'])
     prefit_residuals = np.array(results_dict['prefit_residuals'])
 
-    # Range (Column 0) - Apply Scale
-    range_res = prefit_residuals[:, 0] * scale
-    mu_r, std_r = np.mean(range_res), np.std(range_res)
+    # Helper to safely check for valid data in a column
+    def has_data(arr, col_idx):
+        if arr.ndim < 2:
+            if col_idx == 0 and arr.size > 0: return not np.all(np.isnan(arr))
+            return False
+        if col_idx >= arr.shape[1]: 
+            return False
+        return not np.all(np.isnan(arr[:, col_idx]))
 
-    # Range-Rate (Column 1) - Apply Scale
-    rr_res = prefit_residuals[:, 1] * scale
-    mu_rr, std_rr = np.mean(rr_res), np.std(rr_res)
+    # --- 3. Determine Active Measurement Types ---
+    plot_specs = []
 
-    # --- 3. Setup Plot ---
-    fig, axs = plt.subplots(2, 2, figsize=(16, 10))
-    fig.suptitle(f'Filter Pre-fit Residuals (Innovations)', fontsize=18)
+    # Check Range (Index 0)
+    if has_data(prefit_residuals, 0):
+        # Extract and Scale
+        if prefit_residuals.ndim == 2:
+            data = prefit_residuals[:, 0] * scale
+        else:
+            data = prefit_residuals * scale
+            
+        plot_specs.append({
+            'data': data,
+            'title_time': 'Range Pre-fits vs Time',
+            'title_hist': 'Range PDF',
+            'ylabel': f'Range Innovation ({dist_unit})',
+            'xlabel_hist': f'Residual ({dist_unit})',
+            'color_scatter': 'darkgreen',
+            'color_hist': 'lightgreen',
+            'fit_color': 'r'
+        })
 
-    # ==========================================
-    # ROW 1: RANGE
-    # ==========================================
+    # Check Range-Rate (Index 1)
+    if has_data(prefit_residuals, 1):
+        if prefit_residuals.ndim == 2:
+            data = prefit_residuals[:, 1] * scale
+        else:
+            data = prefit_residuals * scale # Fallback if 1D array implies rate
+
+        plot_specs.append({
+            'data': data,
+            'title_time': 'Range-Rate Pre-fits vs Time',
+            'title_hist': 'Range-Rate PDF',
+            'ylabel': f'Range-Rate Innovation ({rate_unit})',
+            'xlabel_hist': f'Residual ({rate_unit})',
+            'color_scatter': 'darkgreen',
+            'color_hist': 'orange',
+            'fit_color': 'b'
+        })
+
+    if not plot_specs:
+        print("Warning: No valid pre-fit residuals found to plot.")
+        return
+
+    # --- 4. Setup Plot Layout ---
+    n_rows = len(plot_specs)
+    fig, axs = plt.subplots(n_rows, 2, figsize=(16, 5 * n_rows))
     
-    # Col 1: Time History
-    axs[0, 0].scatter(times, range_res, s=2, c='darkgreen', label='Pre-fit Residual', alpha=0.6)
-    axs[0, 0].set_ylabel(f'Range Innovation ({dist_unit})')
-    axs[0, 0].set_title('Range Pre-fits vs Time')
-    axs[0, 0].grid(True, alpha=0.3)
+    # Ensure axs is always 2D [row, col]
+    if n_rows == 1:
+        axs = axs.reshape(1, 2)
 
-    # Col 2: Histogram
-    # Filter outliers for cleaner histogram plot (keep within 6 sigma)
-    if std_r > 1e-12: # Check for non-zero variance
-        range_filt = range_res[np.abs(range_res - mu_r) <= 6 * std_r]
-    else:
-        range_filt = range_res
+    fig.suptitle('Filter Pre-fit Residuals (Innovations)', fontsize=18)
 
-    axs[0, 1].hist(range_filt, bins=40, density=True, alpha=0.6, color='lightgreen', edgecolor='black', label='Residual Dist')
-    
-    # Plot Normal Distribution Overlay
-    if std_r > 1e-12:
-        x_r = np.linspace(mu_r - 4*std_r, mu_r + 4*std_r, 100)
-        axs[0, 1].plot(x_r, stats.norm.pdf(x_r, mu_r, std_r), 'r-', lw=2, label='Normal Fit')
-    
-    axs[0, 1].set_title(fr'Range PDF ($\mu$={mu_r:.2e}, $\sigma$={std_r:.2e})')
-    axs[0, 1].set_xlabel(f'Residual ({dist_unit})')
-    axs[0, 1].grid(alpha=0.3)
-    axs[0, 1].legend(loc='upper right')
+    # --- 5. Plotting Loop ---
+    for row_idx, spec in enumerate(plot_specs):
+        
+        res_data = spec['data']
+        # Filter NaNs for stats
+        valid_res = res_data[~np.isnan(res_data)]
+        
+        if len(valid_res) == 0:
+            continue
 
-    # ==========================================
-    # ROW 2: RANGE-RATE
-    # ==========================================
+        mu, std = np.mean(valid_res), np.std(valid_res)
 
-    # Col 1: Time History
-    axs[1, 0].scatter(times, rr_res, s=2, c='darkgreen', label='Pre-fit Residual', alpha=0.6)
-    axs[1, 0].set_ylabel(f'Range-Rate Innovation ({rate_unit})')
-    axs[1, 0].set_xlabel('Time (s)')
-    axs[1, 0].set_title('Range-Rate Pre-fits vs Time')
-    axs[1, 0].grid(True, alpha=0.3)
+        # === Col 1: Time History ===
+        ax_time = axs[row_idx, 0]
+        ax_time.scatter(times, res_data, s=2, c=spec['color_scatter'], label='Pre-fit Residual', alpha=0.6)
+        
+        ax_time.set_ylabel(spec['ylabel'])
+        ax_time.set_title(spec['title_time'])
+        ax_time.grid(True, alpha=0.3)
+        
+        # Only add time label to the bottom plot
+        if row_idx == n_rows - 1:
+            ax_time.set_xlabel('Time (s)')
 
-    # Col 2: Histogram
-    if std_rr > 1e-12:
-        rr_filt = rr_res[np.abs(rr_res - mu_rr) <= 6 * std_rr]
-    else:
-        rr_filt = rr_res
-    
-    axs[1, 1].hist(rr_filt, bins=40, density=True, alpha=0.6, color='orange', edgecolor='black', label='Residual Dist')
-    
-    if std_rr > 1e-12:
-        x_rr = np.linspace(mu_rr - 4*std_rr, mu_rr + 4*std_rr, 100)
-        axs[1, 1].plot(x_rr, stats.norm.pdf(x_rr, mu_rr, std_rr), 'b-', lw=2, label='Normal Fit')
-    
-    axs[1, 1].set_title(fr'Range-Rate PDF ($\mu$={mu_rr:.2e}, $\sigma$={std_rr:.2e})')
-    axs[1, 1].set_xlabel(f'Residual ({rate_unit})')
-    axs[1, 1].grid(alpha=0.3)
-    axs[1, 1].legend(loc='upper right')
+        # === Col 2: Histogram ===
+        ax_hist = axs[row_idx, 1]
+        
+        # Filter outliers for cleaner histogram visualization (keep within 6 sigma of mean)
+        if std > 1e-12:
+            hist_data = valid_res[np.abs(valid_res - mu) <= 6 * std]
+        else:
+            hist_data = valid_res
+
+        ax_hist.hist(hist_data, bins=40, density=True, alpha=0.6, 
+                     color=spec['color_hist'], edgecolor='black', label='Residual Dist')
+        
+        # Normal Fit Curve
+        if std > 1e-12:
+            x_fit = np.linspace(mu - 4*std, mu + 4*std, 100)
+            ax_hist.plot(x_fit, stats.norm.pdf(x_fit, mu, std), 
+                         color=spec['fit_color'], lw=2, label='Normal Fit')
+        
+        ax_hist.set_title(fr"{spec['title_hist']} ($\mu$={mu:.2e}, $\sigma$={std:.2e})")
+        ax_hist.set_xlabel(spec['xlabel_hist'])
+        ax_hist.grid(alpha=0.3)
+        ax_hist.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.subplots_adjust(top=0.92) # Adjust for suptitle
+    plt.subplots_adjust(top=0.90 if n_rows > 1 else 0.85) # Adjust for suptitle
     
     # Save to file
     save_folder = results_dict.get('save_folder', '.')

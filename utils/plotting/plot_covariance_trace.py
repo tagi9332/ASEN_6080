@@ -16,7 +16,7 @@ def plot_covariance_trace(results_dict):
     unit_pref = results_dict.get('options', {}).get('results_units', 'm')
 
     if unit_pref == 'km':
-        linear_scale = 1e-3
+        linear_scale = 1
         # Variance scales as length squared!
         var_scale = linear_scale ** 2 
         
