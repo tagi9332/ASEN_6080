@@ -13,7 +13,6 @@ import subprocess
 # Run batch script
 subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), 'project_1_batch.py'))])
 
-
 # Run LKF script
 subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), 'project_1_LKF.py'))])
 breakpoint()
@@ -51,11 +50,6 @@ breakpoint()
 # Run Potter LKF script
 subprocess.run([sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), 'project_1_LKF_potter.py'))])
 breakpoint()
-
-# ============================================================
-# Part 8: P0 parameter sensitivity tests
-# ============================================================
-
 
 # ============================================================
 # Part 9: Iterative LKF implementation

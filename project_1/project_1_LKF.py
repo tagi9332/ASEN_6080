@@ -106,7 +106,7 @@ for label, value in zip(state_labels, total_deviation_t0):
 
 post_options = {
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 0,
+    'data_mask_idx': 50,
     'results_units': 'm', # 'm or 'km'
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,

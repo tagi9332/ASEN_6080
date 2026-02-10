@@ -2,6 +2,7 @@ import numpy as np
 from datetime import datetime
 import os 
 from utils.plotting.plot_prefit_residuals import plot_prefit_residuals
+from utils.plotting.plot_rel_state_18_state import plot_batch_relative_state_18
 from utils.plotting.plot_residual_comparison import plot_residual_comparison
 from utils.plotting.plot_state_errors import plot_state_errors
 from utils.plotting.plot_state_deviation import plot_state_deviation
@@ -103,6 +104,9 @@ def post_process(results, obs, options):
 
     if options.get('plot_covariance_ellipsoid', False):
         plot_covariance_ellipsoid(results_dict)
+
+    if options.get('plot_state_deviation', True):
+        plot_batch_relative_state_18(results_dict)
 
     # Print Completion Message
     print("Post-processing and plotting completed.")
