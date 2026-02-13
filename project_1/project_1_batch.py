@@ -99,6 +99,10 @@ print("\nFinal Estimated State Deviation (at t0):")
 for label, value in zip(state_labels, final_deviation):
     print(f"   {label}: {value:4.5f}")
 
+print("\nFinal Estimated State Vector (at t0):")
+for label, value in zip(state_labels, final_state_vector):
+    print(f"   {label}: {value:4.5f}")
+
 
 # Compute r and v norm deviations
 r_dev = final_deviation[0:3]

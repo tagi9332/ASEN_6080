@@ -103,6 +103,10 @@ state_labels = ['x (m)', 'y (m)', 'z (m)', 'vx (m/s)', 'vy (m/s)', 'vz (m/s)',
 for label, value in zip(state_labels, total_deviation_t0):
     print(f"   {label}: {value:4.6f}")
 
+print("\nFinal Estimated State Vector (at t0):")
+for label, value in zip(state_labels, X0_best_estimate):
+    print(f"   {label}: {value:4.6f}")
+
 
 post_options = {
     'save_to_timestamped_folder': True,
