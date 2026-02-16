@@ -148,3 +148,38 @@ def compute_omega(r, v):
     omega = np.array([0, 0, np.linalg.norm(h) / np.dot(r, r)])
 
     return omega
+
+def compute_Q_ECI_from_RIC(r_eci, v_eci, sigma_R, sigma_I, sigma_C):
+    """
+    Computes the Process Noise PSD (3x3) in ECI frame given sigmas in RIC.
+    
+    Args:
+        r_eci (np.array): Position vector [x, y, z]
+        v_eci (np.array): Velocity vector [vx, vy, vz]
+        sigma_R, sigma_I, sigma_C: Sigmas for Radial, In-Track, Cross-Track noise
+        
+    Returns:
+        Q_ECI (3x3 matrix): The covariance rotated into the inertial frame.
+    """
+    # 1. Compute Unit Vectors for RIC Frame
+    # Radial: Unit vector in direction of position
+    u_r = r_eci / np.linalg.norm(r_eci)
+    
+    # Cross-track: Unit vector normal to orbital plane (h = r x v)
+    h = np.cross(r_eci, v_eci)
+    u_c = h / np.linalg.norm(h)
+    
+    # In-track: Completes the triad (i = c x r)
+    u_i = np.cross(u_c, u_r)
+    
+    # 2. Rotation Matrix (RIC -> ECI)
+    # The columns are the RIC basis vectors expressed in ECI
+    R_RIC_to_ECI = np.column_stack((u_r, u_i, u_c))
+    
+    # 3. Define Q in RIC (Diagonal)
+    Q_RIC = np.diag([sigma_R**2, sigma_I**2, sigma_C**2])
+    
+    # 4. Rotate Covariance: Q_ECI = R * Q_RIC * R^T
+    Q_ECI = R_RIC_to_ECI @ Q_RIC @ R_RIC_to_ECI.T
+    
+    return Q_ECI

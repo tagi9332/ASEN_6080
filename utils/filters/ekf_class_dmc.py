@@ -8,9 +8,7 @@ from utils.ground_station_utils.gs_latlon import get_gs_eci_state
 from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 from resources.gs_locations_latlon import stations_ll
 from utils.misc.print_progress import print_progress
-from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-from utils.frame_conversions.rel_to_inertial_functions import compute_Q_ECI_from_RIC
-
+from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_dmc
 
 @dataclass
 class FilterResults:

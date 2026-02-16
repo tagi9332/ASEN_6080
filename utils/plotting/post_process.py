@@ -1,6 +1,7 @@
 import numpy as np
 from datetime import datetime
 import os 
+from utils.plotting.plot_covariance_ellipsoid import plot_covariance_ellipsoid
 from utils.plotting.plot_prefit_residuals import plot_prefit_residuals
 from utils.plotting.plot_residual_comparison import plot_residual_comparison
 from utils.plotting.plot_state_errors import plot_state_errors
@@ -12,6 +13,7 @@ from utils.plotting.plot_covariance_trace import plot_covariance_trace
 from utils.plotting.plot_filter_consistency import plot_filter_consistency
 from utils.plotting.plot_nis_metric import plot_nis_metric
 from utils.plotting.report_RMS_error import report_filter_metrics
+from utils.plotting.save_log_file import save_run_log
 
 
 
@@ -49,28 +51,36 @@ def post_process(results, obs, options):
     results_dict['save_folder'] = save_folder
     print(f"Output directory set to: {save_folder}")
 
-# 3. Compute state errors against truth (if file provided)
+# 3. Compute state errors against truth
     if 'truth_traj_file' in options:
         try:
-            # --- FIX: Apply the same mask to the observations ---
-            # Retrieve mask (default to full slice if missing)
-            mask_idx = options.get('data_mask_idx', slice(None))
+            # --- FIX: Ensure Observation Dataframe Matches Filter Results ---
             
-            # If mask is an integer (start index), convert to slice
-            if isinstance(mask_idx, int):
-                mask_idx = slice(mask_idx, None)
-                
-            # Apply mask to the observations dataframe
-            df_meas_masked = obs.iloc[mask_idx]
+            # Step A: Slice off initial state from obs if package_results did it
+            # We can check this by comparing lengths.
+            # results_dict['times'] is the "truth" for what the filter kept.
+            
+            filter_times = results_dict['times']
+            
+            # Filter the original observations to match the timestamps kept by package_results
+            # This is safer than index slicing because it guarantees time alignment
+            df_meas_masked = obs[obs['Time(s)'].isin(filter_times)]
+
+            # Double check lengths to be safe
+            if len(df_meas_masked) != len(results_dict['state_hist']):
+                print(f"Warning: Length mismatch in post_process. "
+                      f"Obs: {len(df_meas_masked)}, States: {len(results_dict['state_hist'])}")
 
             state_errors = compute_state_error(
                 x_corrected=results_dict['state_hist'], 
-                df_meas=df_meas_masked,              # <--- PASS MASKED OBS
+                df_meas=df_meas_masked,              # <--- PASS TIME-MATCHED OBS
                 truth_file=options['truth_traj_file']
             )
             results_dict['state_errors'] = np.array(state_errors)
+            
         except Exception as e:
             print(f"Warning: Could not compute state errors. {e}")
+            # Initialize empty array to prevent plotting crashes
             results_dict['state_errors'] = np.array([])
 
     # 4. Trigger Plots based on Options
@@ -97,6 +107,9 @@ def post_process(results, obs, options):
 
     if options.get('plot_nis_metric', False):
         plot_nis_metric(results_dict)
+
+    if options.get('plot_covariance_ellipsoid', False):
+        plot_covariance_ellipsoid(results_dict)
 
     # Print Completion Message
     print("Post-processing and plotting completed.")

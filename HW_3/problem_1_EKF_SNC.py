@@ -13,6 +13,11 @@ from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from utils.filters.ekf_class import EKF
 from utils.plotting.post_process import post_process
 
+# Output directory for plots
+output_dir = 'HW_3/plots'
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
+
 # ============================================================
 # Main Execution
 # ============================================================
@@ -29,9 +34,10 @@ P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
 # Measurement Noise (Rk): [Range (km^2), Range-Rate (km/s)^2]
 Rk = np.diag([1e-6, 1e-12])
 
-# Process Noise (Q)
-# Set to zero for this problem (deterministic dynamics assumed)
-Q = np.diag([0, 0, 0, 0, 0, 0]) 
+# Process noise (SNC implementation)
+sigma_a = 1e-6 # m/s^2
+Q = sigma_a**2 * np.eye(3)
+
 
 # 2. Setup Reference Trajectory (The "Truth" or Linearization Point)
 # -----------------------------------------------------------------
@@ -52,7 +58,8 @@ options = {
     'coeffs': coeffs,
     'abs_tol': 1e-10,
     'rel_tol': 1e-10,
-    'bootstrap_steps': 50  # Number of initial steps to run in LKF mode
+    'bootstrap_steps': 50,  # Number of initial steps to run in LKF mode
+    'SNC_frame': 'RIC' # ECI or RIC frame for SNC implementation
 }
 
 # Run the Filter
@@ -82,6 +89,7 @@ post_options = {
     'plot_residual_comparison': True,
     'plot_covariance_trace': True,
     'plot_filter_consistency': True,
+    'plot_covariance_ellipsoid': True,
     'plot_nis_metric': True
 }
 
