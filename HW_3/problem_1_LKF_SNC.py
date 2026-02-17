@@ -18,8 +18,7 @@ from utils.plotting.post_process import post_process
 # ============================================================
 # Initial State Deviation & Covariances
 x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
-P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
-# P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
 Rk = np.diag([1e-6, 1e-12])
 
 # Initial Truth State (without deviation)
@@ -46,7 +45,7 @@ options = {
 }
 
 # Process noise (SNC implementation)
-sigma_a = 1e-8 # m/s^2
+sigma_a = 1e-5 / 1000 # km/s^2
 Q = sigma_a**2 * np.eye(3)
 
 lkf_filter = LKF(n_states=6)
@@ -57,7 +56,7 @@ results = lkf_filter.run(obs, X_0, x_0, P0, Rk, Q, options)
 post_options = {
     'truth_traj_file': r'data\problem_2a_traj.csv',
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 0,
+    'data_mask_idx': 50,
     'plot_state_errors': True,
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,

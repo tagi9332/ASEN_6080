@@ -32,10 +32,10 @@ P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
 
 
 # Measurement Noise (Rk): [Range (km^2), Range-Rate (km/s)^2]
-Rk = np.diag([1e-6, 1e-12])
+Rk = np.diag([1e-3, 1e-6])
 
 # Process noise (SNC implementation)
-sigma_a = 1e-6 # m/s^2
+sigma_a = 1e-8 / 1000 # convert to km/s^2 for consistency with state units
 Q = sigma_a**2 * np.eye(3)
 
 

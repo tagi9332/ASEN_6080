@@ -24,7 +24,7 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 # 1. Define the Sweep Range (Sigma for Process Noise)
-sigmas_to_test = np.logspace(-15, -2, num=28) 
+sigmas_to_test = np.logspace(-15, -2, num=20) / 1000 # Convert from m/s^2 to km/s^2 for consistency with state units
 
 # 2. File Paths
 meas_file = r'data/measurements_2a_noisy.csv'
@@ -32,7 +32,7 @@ truth_file = r'data/problem_2a_traj.csv'
 
 # 3. Initial Setup
 x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
-P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
+P0 = np.diag([1, 1, 1e-3, 1, 1e-3, 1e-3])**2
 Rk = np.diag([1e-6, 1e-12])
 
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
@@ -91,7 +91,7 @@ rms_res_rr_history = []
 print(f"Starting SNC Parameter Sweep over {len(sigmas_to_test)} values...")
 
 for i, sigma_acc in enumerate(sigmas_to_test):
-    print(f"--- Run {i+1}/{len(sigmas_to_test)}: Sigma = {sigma_acc:.1e} m/s^2 ---")
+    print(f"--- Run {i+1}/{len(sigmas_to_test)}: Sigma = {sigma_acc*1000:.1e} m/s^2 ---")
 
     # 1. Define Process Noise Spectral Density
     Q_PSD = (sigma_acc**2) * np.eye(3) 
@@ -151,8 +151,8 @@ print("\nSweep Complete. Generating Summary Plots...")
 
 # Plot (i): Post-fit Measurement Residual RMS vs Sigma
 plt.figure(figsize=(10, 6))
-plt.loglog(sigmas_to_test, rms_res_range_history, 'b-o', label='Range RMS (km)')
-plt.loglog(sigmas_to_test, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
+plt.loglog(sigmas_to_test*1e3, rms_res_range_history, 'b-o', label='Range RMS (km)')
+plt.loglog(sigmas_to_test*1e3, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
 plt.xlabel(r'Process Noise Sigma $\sigma$ [$m/s^2$]')
 plt.ylabel('Post-fit Residual RMS')
 plt.title('i. Measurement Residual RMS vs. Process Noise Sigma')
@@ -167,14 +167,14 @@ fig, ax1 = plt.subplots(figsize=(10, 6))
 color = 'tab:blue'
 ax1.set_xlabel(r'Process Noise Sigma $\sigma$ [$m/s^2$]')
 ax1.set_ylabel('3D Position RMS [km]', color=color)
-ax1.loglog(sigmas_to_test, rms_pos_history, 'o-', color=color, label='3D Position RMS')
+ax1.loglog(sigmas_to_test*1e3, rms_pos_history, 'o-', color=color, label='3D Position RMS')
 ax1.tick_params(axis='y', labelcolor=color)
 ax1.grid(True, which="both", ls="-", alpha=0.5)
 
 ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
 color = 'tab:orange'
 ax2.set_ylabel('3D Velocity RMS [km/s]', color=color)
-ax2.loglog(sigmas_to_test, rms_vel_history, 's-', color=color, label='3D Velocity RMS')
+ax2.loglog(sigmas_to_test*1e3, rms_vel_history, 's-', color=color, label='3D Velocity RMS')
 ax2.tick_params(axis='y', labelcolor=color)
 
 plt.title('ii. 3D State Error RMS vs. Process Noise Sigma')

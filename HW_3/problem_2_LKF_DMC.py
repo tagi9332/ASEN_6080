@@ -21,7 +21,7 @@ meas_file = r'data/measurements_2a_noisy.csv'
 truth_file = r'data/problem_2a_traj.csv'
 
 # DMC Sigma Sweep (Steady State Acceleration Sigma)
-sigmas_to_test = np.logspace(-16, -2, num=15) 
+sigmas_to_test = np.logspace(-15, -2, num=15) / 1000 # Convert from m/s^2 to km/s^2 for consistency with state units
 
 # ============================================================
 # 1. INITIALIZE STATE & ORBITAL PARAMETERS
@@ -79,15 +79,15 @@ X_0_ref = np.concatenate([r0_ref, v0_ref, a0_ref, Phi0])
 # Initial Covariance (P0)
 P0 = np.diag([
     1, 1, 1,              # Position Variance (1 km^2)
-    1e-6, 1e-6, 1e-6,     # Velocity Variance
-    1e-9, 1e-9, 1e-9      # Acceleration Variance (Small initial guess)
-])
+    1e-3, 1e-3, 1e-3,     # Velocity Variance
+    1e-6, 1e-6, 1e-6      # Acceleration Variance (Small initial guess)
+])**2
 
 # Measurement Noise Matrix
-Rk = np.diag([1e-6, 1e-12])
+Rk = np.diag([1e-3, 1e-6])
 
 # The initial LKF deviation state (x_hat) must be ZERO.
-x_hat_0 = np.zeros(9) 
+x_hat_0 = np.zeros(9) # [0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 # ============================================================
 # 4. LOAD DATA (MODIFIED: NO INTERPOLATION)
@@ -180,8 +180,8 @@ for i, sigma in enumerate(sigmas_to_test):
 
 # Plot 1: Position and Velocity RMS
 plt.figure(figsize=(10,6))
-plt.loglog(sigmas_to_test, rms_pos_history, 'b-o', label='Pos RMS (km)')
-plt.loglog(sigmas_to_test, rms_vel_history, 'r-s', label='Vel RMS (km/s)')
+plt.loglog(sigmas_to_test *1e3, rms_pos_history, 'b-o', label='Pos RMS (km)')
+plt.loglog(sigmas_to_test *1e3, rms_vel_history, 'r-s', label='Vel RMS (km/s)')
 plt.xlabel(r'Steady State Acceleration $\sigma$ [$m/s^2$]')
 plt.ylabel('State RMS Error')
 plt.title(f'DMC State Accuracy Sweep (Tau={tau:.1f}s)')
@@ -192,8 +192,8 @@ plt.show()
 
 # Plot 2: Measurement Residual RMS
 plt.figure(figsize=(10,6))
-plt.loglog(sigmas_to_test, rms_res_range_history, 'b-o', label='Range RMS (km)')
-plt.loglog(sigmas_to_test, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
+plt.loglog(sigmas_to_test *1e3, rms_res_range_history, 'b-o', label='Range RMS (km)')
+plt.loglog(sigmas_to_test *1e3, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
 plt.xlabel(r'Steady State Acceleration $\sigma$ [$m/s^2$]')
 plt.ylabel('Post-fit Residual RMS')
 plt.title(f'DMC Measurement Residual Sweep (Tau={tau:.1f}s)')

@@ -64,7 +64,7 @@ def plot_residual_comparison(results_dict):
     axes[1, 0].set_xlabel('Time (s)')
     axes[1, 1].set_xlabel('Time (s)')
     
-    fig.suptitle('LKF Performance: Pre-fit vs. Post-fit Comparison', fontsize=16)
+    fig.suptitle('Filter Performance: Pre-fit vs. Post-fit Comparison', fontsize=16)
     plt.tight_layout()
     plt.subplots_adjust(top=0.90) # Make space for main title
     
