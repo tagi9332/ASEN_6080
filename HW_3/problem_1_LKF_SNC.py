@@ -45,7 +45,7 @@ options = {
 }
 
 # Process noise (SNC implementation)
-sigma_a = 1e-5 / 1000 # km/s^2
+sigma_a = 1e-6 / 1000 # km/s^2
 Q = sigma_a**2 * np.eye(3)
 
 lkf_filter = LKF(n_states=6)
@@ -56,7 +56,7 @@ results = lkf_filter.run(obs, X_0, x_0, P0, Rk, Q, options)
 post_options = {
     'truth_traj_file': r'data\problem_2a_traj.csv',
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 50,
+    'data_mask_idx': 0,
     'plot_state_errors': True,
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,

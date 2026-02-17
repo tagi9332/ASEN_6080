@@ -87,7 +87,7 @@ P0 = np.diag([
 Rk = np.diag([1e-3, 1e-6])
 
 # The initial LKF deviation state (x_hat) must be ZERO.
-x_hat_0 = np.zeros(9) # [0, 0, 0, 0, 0, 0, 0, 0, 0]
+x_hat_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3, 0, 0, 0])
 
 # ============================================================
 # 4. LOAD DATA (MODIFIED: NO INTERPOLATION)

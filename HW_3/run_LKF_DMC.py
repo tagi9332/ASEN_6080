@@ -63,7 +63,7 @@ lkf_options = {
 # ============================================================
 
 # Initial Deviation (Error) we apply to our estimate
-x_0_dev = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0])
+x_0_dev = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3, 0, 0, 0])
 
 # Construct the Initial Reference Trajectory (The "Best Estimate")
 r0_ref = r0_true + x_0_dev[:3]
@@ -84,8 +84,7 @@ P0 = np.diag([
 # Measurement Noise Matrix
 Rk = np.diag([1e-6, 1e-12])
 
-# The initial LKF deviation state (x_hat) must be ZERO.
-x_hat_0 = np.zeros(9) 
+x_hat_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3, 0, 0, 0])
 
 # ============================================================
 # 4. LOAD DATA
@@ -108,7 +107,7 @@ truth_interp = interp1d(truth_df['Time(s)'],
 # ============================================================
 # RUN LKF
 # ============================================================
-sigma = 1e-8
+sigma = 1e-6 / 1000
 
 # Calculate PSD (q) based on steady-state Variance (sigma^2)
 q_driving_noise = 2 * (sigma**2) * beta
