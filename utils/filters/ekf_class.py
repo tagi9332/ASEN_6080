@@ -9,8 +9,7 @@ from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute
 from resources.gs_locations_latlon import stations_ll
 from utils.misc.print_progress import print_progress
 from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-from utils.frame_conversions.rel_to_inertial_functions import compute_Q_ECI_from_RIC
-
+from utils.process_noise.compute_q_discrete import compute_q_discrete 
 
 @dataclass
 class FilterResults:
@@ -18,7 +17,7 @@ class FilterResults:
     P_hist: Any              
     state_hist: Any          
     innovations: Any         
-    postfit_residuals: Any  
+    postfit_residuals: Any   
     nis_hist: Any 
 
     def __post_init__(self):
@@ -34,20 +33,31 @@ class EKF:
         self.n = n_states
         self.I = np.eye(n_states)
 
-    def run(self, obs, X_0, x_0, P0, Rk, Q, options):
+    def run(self, obs, X_0, x_0, P0, Rk, options):
 
         # Print filter start message
-        print("Initializing EKF...")
+        print(f"Initializing EKF with n_states={self.n}...")
         
         # --- Initialization ---
         coeffs = options['coeffs']
         bootstrap_steps = options.get('bootstrap_steps', 0)
         abs_tol = options['abs_tol']
         rel_tol = options['rel_tol']
-        SNC_frame = options.get('SNC_frame', 'ECI')
         
-        # Force X_curr to be only the 6-element Cartesian state.
-        X_curr = X_0[0:6].copy()
+        # ODE Function: Default to 6x6 if not provided, but allow override for DMC (9x9)
+        ode_func = options.get('ode_func', zonal_sph_ode_6x6)
+
+        # --- COEFFICIENT SAFETY CHECK ---
+        # If using the default 6x6 ODE but coeffs has 4 elements (mu, J2, J3, B),
+        # slice it to prevent "too many values to unpack" error.
+        if ode_func == zonal_sph_ode_6x6 and len(coeffs) > 3:
+            coeffs_for_ode = coeffs[:3]
+        else:
+            coeffs_for_ode = coeffs
+
+        # Initialize State: Generic slicing to support 6 (SNC) or 9 (DMC) states
+        # X_curr is the full state vector (e.g., 9x1 for DMC)
+        X_curr = X_0[0:self.n].copy()
         
         # Deviation Estimate (x_hat)
         x_dev = x_0.copy()
@@ -57,75 +67,47 @@ class EKF:
         _P, _state, _x = [], [], []
         _prefit_res, _postfit_res = [], []
         _nis_hist = []
-        t_prev = 0 # Assuming start time is 0
+        
+        # Initialize time
+        t_prev = obs.iloc[0]['Time(s)'] 
 
-        for k in range(1,len(obs)):
+        # Loop starts at 1, propagating from t_prev (k-1) to t_curr (k)
+        for k in range(1, len(obs)):
             meas_row = obs.iloc[k]
             t_curr = meas_row['Time(s)']
             dt = t_curr - t_prev
 
             # Print progress
-            print_progress(k,len(obs))
+            print_progress(k, len(obs))
 
             # -------------------------------------------------------
-            # 1. PROPAGATION
+            # 1. PROPAGATION (Step-by-Step)
             # -------------------------------------------------------
-            # Initial condition: Current Ref State (6) + Identity STM (36) = 42 elements
+            # Initial condition: Current Ref State (n) + Identity STM (n*n)
+            # We reset STM to Identity at every step to ensure numerical stability.
             state_integ_0 = np.concatenate([X_curr, np.eye(self.n).flatten()])
             
             sol_step = solve_ivp(
-                zonal_sph_ode_6x6, 
+                ode_func, 
                 (t_prev, t_curr), 
                 state_integ_0,
-                args=(coeffs,),
+                args=(coeffs_for_ode,),
                 rtol=rel_tol, atol=abs_tol
             )
             
-            # Extract propagated Reference (first 6) and STM (last 36)
-            X_ref_pred = sol_step.y[0:6, -1]
-            Phi_step = sol_step.y[6:, -1].reshape(self.n, self.n)
+            # Extract propagated Reference (first n) and Step-STM (last n*n)
+            X_ref_pred = sol_step.y[0:self.n, -1]
+            Phi_step = sol_step.y[self.n:, -1].reshape(self.n, self.n)
             
-            # Propagate Deviation (LKF Prediction)
+            # Propagate Deviation: dx_k = Phi * dx_k-1
             x_dev_pred = Phi_step @ x_dev
 
-            # SNC process noise
-            Q_step_PSD = Q.copy() # Default if no frame transformation needed
-            # If SNC is defined in RIC, rotate Q into ECI frame
-            if SNC_frame == 'RIC':
-                # Use current reference state to define the frame
-                r_vec = X_ref_pred[0:3]
-                v_vec = X_ref_pred[3:6]
-                
-                # --- Compute Rotation Matrix (RIC -> ECI) ---
-                # Radial: Unit vector in direction of position
-                u_r = r_vec / np.linalg.norm(r_vec)
-                
-                # Cross-track: Unit vector normal to orbital plane
-                h_vec = np.cross(r_vec, v_vec)
-                u_c = h_vec / np.linalg.norm(h_vec)
-                
-                # In-track: Completes the triad
-                u_i = np.cross(u_c, u_r)
-                
-                # Rotation Matrix R = [u_r, u_i, u_c]
-                R_RIC2ECI = np.column_stack((u_r, u_i, u_c))
-                
-                # Rotate the RIC diagonal covariance into ECI
-                # Q_ECI = R * Q_RIC * R.T
-                Q_step_PSD = R_RIC2ECI @ Q @ R_RIC2ECI.T
-
-            # Calculate Discrete Process Noise Matrix (Q_k)
-            # using the PSD for this specific step
-            Q_rr = (dt**3 / 3) * Q_step_PSD
-            Q_rv = (dt**2 / 2) * Q_step_PSD
-            Q_vv = dt * Q_step_PSD
+            # --- PROCESS NOISE STEP ---
+            # Use the new helper function to compute Q_k
+            # It handles the rotation from RIC to ECI using position/velocity from X_ref_pred
+            Q_k = compute_q_discrete(dt, X_ref_pred, options)
             
-            Q_k  = np.block([
-                [Q_rr, Q_rv],
-                [Q_rv.T, Q_vv]
-            ])
-            
-            # Propagate Covariance
+            # Propagate Covariance: P = Phi * P * Phi' + Q
             P_pred = Phi_step @ P @ Phi_step.T + Q_k
             
             # -------------------------------------------------------
@@ -136,14 +118,22 @@ class EKF:
             Rs, Vs = get_gs_eci_state(lat, lon, t_curr, init_theta=np.deg2rad(122))
             
             # Predicted Observation (based on Reference)
-            y_pred_ref = compute_rho_rhodot(X_ref_pred, np.concatenate([Rs, Vs]))
+            # compute_rho_rhodot expects 6-element state [r, v]
+            y_pred_ref = compute_rho_rhodot(X_ref_pred[0:6], np.concatenate([Rs, Vs]))
             y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
             
             # Residual (Observation - Reference)
             prefit_res = y_obs - y_pred_ref
             
             # H Matrix evaluated at Reference
-            H = compute_H_matrix(X_ref_pred[0:3], X_ref_pred[3:6], Rs, Vs)
+            # compute_H_matrix returns 2x6. If n_states=9, we pad with zeros.
+            H_6 = compute_H_matrix(X_ref_pred[0:3], X_ref_pred[3:6], Rs, Vs)
+            
+            if self.n > 6:
+                # Pad H for extra states (e.g. DMC acceleration parameters)
+                H = np.hstack([H_6, np.zeros((2, self.n - 6))])
+            else:
+                H = H_6
             
             # Innovation: dy - H * deviation_prediction
             innovation = prefit_res - H @ x_dev_pred 
@@ -167,6 +157,8 @@ class EKF:
             # -------------------------------------------------------
             if k < bootstrap_steps:
                 # === LKF Mode ===
+                # Reference trajectory evolves naturally (X_curr = X_ref_pred)
+                # Deviation grows large.
                 X_curr = X_ref_pred
                 
                 # Best Estimate = Ref + Dev
@@ -174,10 +166,11 @@ class EKF:
                 
             else:
                 # === EKF Mode ===
+                # Absorb deviation into the reference at every step
                 X_curr = X_ref_pred + x_dev
                 
-                # Reset deviation
-                x_dev = np.zeros(6)
+                # Reset deviation to zero
+                x_dev = np.zeros(self.n)
                 
                 X_best_est = X_curr
 
@@ -192,6 +185,7 @@ class EKF:
             _prefit_res.append(prefit_res.copy())
             _postfit_res.append(postfit_res.copy())
             _nis_hist.append(nis)
+            
             t_prev = t_curr
 
         return FilterResults(_x, _P, _state, _prefit_res, _postfit_res, _nis_hist)

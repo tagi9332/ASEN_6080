@@ -295,7 +295,7 @@ def zonal_sph_ode_dmc(t, state, coeffs):
     dvdt_grav = -(mu / r**3) * r_vec
     
     if j2 != 0:
-        j2_f = 1.5 * j2 * mu * (re**2 / r**5)
+        j2_f = -1.5 * j2 * mu * (re**2 / r**5)
         dvdt_grav += j2_f * np.array([x*(5*z_r_sq-1), y*(5*z_r_sq-1), z*(5*z_r_sq-3)])
         
     if j3 != 0:

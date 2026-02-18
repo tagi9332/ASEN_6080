@@ -1,183 +1,129 @@
 import os, sys
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 
 # ============================================================
-# Imports & Constants (Preserved from your snippet)
+# Configuration & Imports
 # ============================================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from utils.orbital_element_conversions.oe_conversions import orbital_elements_to_inertial
-from resources.constants import MU_EARTH, J2, J3, R_EARTH
+from resources.constants import MU_EARTH, J2
 from utils.filters.lkf_class import LKF
-from utils.plotting.post_process import post_process
 
-# ============================================================
-# Configuration
-# ============================================================
-
-# Output directory for plots
-output_dir = 'HW_3/plots'
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-
-# 1. Define the Sweep Range (Sigma for Process Noise)
-sigmas_to_test = np.logspace(-15, -2, num=28) 
-
-# 2. File Paths
 meas_file = r'data/measurements_2a_noisy.csv'
 truth_file = r'data/problem_2a_traj.csv'
 
-# 3. Initial Setup
-x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
-P0 = np.diag([1, 1, 1, 1e-6, 1e-6, 1e-6])
-Rk = np.diag([1e-6, 1e-12])
+# Constants
+sigma_acc = 1e-8 # km/s^2
+Q_PSD = (sigma_acc**2) * np.eye(3)
 
+# Initial State
+x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
+P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
+Rk = np.diag([1e-6, 1e-12])
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 Phi0 = np.eye(6).flatten()
 X_0_ref = np.concatenate([r0 + x_0[:3], v0 + x_0[3:], Phi0])
 
 # ============================================================
-# LOAD AND CLEAN DATA
+# 1. ROBUST DATA LOADING
 # ============================================================
+# Load Measurements
 obs = pd.read_csv(meas_file)
+obs.columns = obs.columns.str.strip()
 
-# CORRECTED TRUTH FILE LOADING
-# 1. delim_whitespace=True: Handles the spaces between numbers
-# 2. header=None: Tells pandas there is no header row
-# 3. names=[...]: Manually assigns the column names you need
+# Load Truth (Restored whitespace delimiter settings)
 truth_df = pd.read_csv(truth_file, 
                        delim_whitespace=True, 
                        header=None, 
                        names=['Time(s)', 'x', 'y', 'z', 'vx', 'vy', 'vz'])
 
-# Clean up measurement columns just in case
-obs.columns = obs.columns.str.strip()
+# Force columns to numeric to prevent string comparison errors
+cols = ['x', 'y', 'z', 'vx', 'vy', 'vz']
+for c in cols:
+    truth_df[c] = pd.to_numeric(truth_df[c], errors='coerce')
 
-# Prepare Truth Interpolator
-# Now that column names are manually assigned, this will work
+# Create Interpolator
 truth_interp = interp1d(truth_df['Time(s)'], 
-                        truth_df[['x', 'y', 'z', 'vx', 'vy', 'vz']].values, 
-                        axis=0, kind='cubic', fill_value="extrapolate") # type: ignore
-
-# Prepare Truth Interpolator (ensures we compare state at exact timestamps)
-# Assuming truth file has columns: 'Time(s)', 'x', 'y', 'z', 'vx', 'vy', 'vz'
-truth_interp = interp1d(truth_df['Time(s)'], 
-                        truth_df[['x', 'y', 'z', 'vx', 'vy', 'vz']].values, 
-                        axis=0, kind='cubic', fill_value="extrapolate") # type: ignore
-
-coeffs = [MU_EARTH, J2, 0] 
-lkf_options = {
-    'coeffs': coeffs,
-    'abs_tol': 1e-10,
-    'rel_tol': 1e-10,
-    'SNC_frame': 'RIC' # ECI or RIC frame for SNC implementation
-
-}
+                        truth_df[cols].values, 
+                        axis=0, kind='cubic', fill_value="extrapolate")
 
 # ============================================================
-# Storage for Sweep Metrics
+# 2. RUN CASES
 # ============================================================
-rms_pos_history = []
-rms_vel_history = []
-rms_res_range_history = []
-rms_res_rr_history = []
+def run_case(frame_type):
+    print(f"Running LKF with Process Noise in {frame_type} frame...")
+    
+    coeffs = [MU_EARTH, J2, 0]
+    options = {
+        'coeffs': coeffs,
+        'abs_tol': 1e-10,
+        'rel_tol': 1e-10,
+        'method': 'SNC',
+        'frame_type': frame_type,
+        'Q_cont': Q_PSD,
+        'threshold': 10.0,
+        'B': None
+    }
+    
+    lkf = LKF(n_states=6)
+    results = lkf.run(obs, X_0_ref, x_0, P0, Rk, options)
+    
+    # Validation
+    t_eval = obs['Time(s)'].values
+    truth_states = truth_interp(t_eval)
+    
+    # Ensure shapes match
+    n = min(len(results.state_hist), len(truth_states))
+    est_states = np.array(results.state_hist)[:n]
+    truth_states = truth_states[:n]
+    
+    state_errors = est_states - truth_states
+    
+    # Compute Float Metrics (Explicit Cast)
+    pos_rms = float(np.sqrt(np.mean(np.linalg.norm(state_errors[:, :3], axis=1)**2)))
+    vel_rms = float(np.sqrt(np.mean(np.linalg.norm(state_errors[:, 3:], axis=1)**2)))
+    
+    post_res = np.array(results.postfit_residuals)
+    res_rng_rms = float(np.sqrt(np.mean(post_res[:, 0]**2)))
+    res_rr_rms = float(np.sqrt(np.mean(post_res[:, 1]**2)))
+    
+    return {
+        'Pos RMS (km)': pos_rms,
+        'Vel RMS (km/s)': vel_rms,
+        'Res Range (km)': res_rng_rms,
+        'Res Rate (km/s)': res_rr_rms
+    }
 
-# ============================================================
-# Main Sweep Loop
-# ============================================================
-print(f"Starting SNC Parameter Sweep over {len(sigmas_to_test)} values...")
-
-for i, sigma_acc in enumerate(sigmas_to_test):
-    print(f"--- Run {i+1}/{len(sigmas_to_test)}: Sigma = {sigma_acc:.1e} m/s^2 ---")
-
-    # 1. Define Process Noise Spectral Density
-    Q_PSD = (sigma_acc**2) * np.eye(3) 
-
-    # 2. Run Filter
-    lkf_filter = LKF(n_states=6)
-    results = lkf_filter.run(obs, X_0_ref, x_0, P0, Rk, Q_PSD, lkf_options)
-    
-    # --- CALCULATE METRICS FOR PLOTS (i) and (ii) ---
-    
-    # A. Get Truth State at the measurement times used in the filter
-    # 'results.state_hist' typically aligns with the filter steps. 
-    # We must ensure we grab the truth at the corresponding times.
-    # Note: LKF usually outputs N-1 steps (skips t0), check your implementation.
-    # Here we assume results.state_hist aligns with obs['Time(s)'][1:] or similar.
-    
-    # Extract times corresponding to the filter output
-    # (Adjust '1:' based on whether your LKF outputs t0 or starts at t1)
-    filter_times = obs['Time(s)'].values[1:len(results.state_hist)+1] 
-    
-    # Get Truth at these times
-    truth_states = truth_interp(filter_times)
-    
-    # B. Compute State Errors (Estimated - Truth)
-    # results.state_hist is (N, 6)
-    state_errors = results.state_hist - truth_states
-    
-    pos_err_3d = np.linalg.norm(state_errors[:, 0:3], axis=1)
-    vel_err_3d = np.linalg.norm(state_errors[:, 3:6], axis=1)
-    
-    # C. Compute RMS (Root Mean Square)
-    rms_pos = np.sqrt(np.mean(pos_err_3d**2))
-    rms_vel = np.sqrt(np.mean(vel_err_3d**2))
-    
-    rms_pos_history.append(rms_pos)
-    rms_vel_history.append(rms_vel)
-
-    # D. Compute Post-fit Residual RMS
-    # results.postfit_residuals is (N, 2) where col 0 is Range, col 1 is Range-Rate
-    res_range = results.postfit_residuals[:, 0]
-    res_rr    = results.postfit_residuals[:, 1]
-    
-    rms_res_range = np.sqrt(np.mean(res_range**2))
-    rms_res_rr    = np.sqrt(np.mean(res_rr**2))
-    
-    rms_res_range_history.append(rms_res_range)
-    rms_res_rr_history.append(rms_res_rr)
-
-    # (Optional) Run full post-processing if you still want the individual PDF reports
-    # post_process(results, obs, post_options)
-
-print("\nSweep Complete. Generating Summary Plots...")
+metrics_ric = run_case('RIC')
+metrics_eci = run_case('ECI')
 
 # ============================================================
-# PLOTTING
+# 3. COMPARISON & REPORTING
 # ============================================================
+# Create DataFrame fresh to avoid index duplicates from previous runs
+df = pd.DataFrame([metrics_ric, metrics_eci], index=['RIC Frame', 'ECI Frame'])
 
-# Plot (i): Post-fit Measurement Residual RMS vs Sigma
-plt.figure(figsize=(10, 6))
-plt.loglog(sigmas_to_test, rms_res_range_history, 'b-o', label='Range RMS (km)')
-plt.loglog(sigmas_to_test, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
-plt.xlabel(r'Process Noise Sigma $\sigma$ [$m/s^2$]')
-plt.ylabel('Post-fit Residual RMS')
-plt.title('i. Measurement Residual RMS vs. Process Noise Sigma')
-plt.grid(True, which="both", ls="-", alpha=0.5)
-plt.legend()
-plt.savefig(os.path.join(output_dir, 'LKF_SNC_sweep_residuals_RIC.png'))
-# plt.show()
+# Calculate Delta
+diff = df.loc['RIC Frame'] - df.loc['ECI Frame']
+diff.name = 'Delta (RIC - ECI)'
 
-# Plot (ii): 3D RMS Position and Velocity Errors vs Sigma
-fig, ax1 = plt.subplots(figsize=(10, 6))
+# Append Delta row
+df = pd.concat([df, diff.to_frame().T])
 
-color = 'tab:blue'
-ax1.set_xlabel(r'Process Noise Sigma $\sigma$ [$m/s^2$]')
-ax1.set_ylabel('3D Position RMS [km]', color=color)
-ax1.loglog(sigmas_to_test, rms_pos_history, 'o-', color=color, label='3D Position RMS')
-ax1.tick_params(axis='y', labelcolor=color)
-ax1.grid(True, which="both", ls="-", alpha=0.5)
+print("\n" + "="*60)
+print(f"LKF SNC Comparison: Sigma = {sigma_acc} km/s^2")
+print("="*60)
+print(df.to_markdown(floatfmt=".6e"))
+print("="*60)
 
-ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-color = 'tab:orange'
-ax2.set_ylabel('3D Velocity RMS [km/s]', color=color)
-ax2.loglog(sigmas_to_test, rms_vel_history, 's-', color=color, label='3D Velocity RMS')
-ax2.tick_params(axis='y', labelcolor=color)
+print("\nInterpretation:")
+# Explicit float casting for the comparison check
+ric_val = float(df.loc['RIC Frame', 'Pos RMS (km)'])
+eci_val = float(df.loc['ECI Frame', 'Pos RMS (km)'])
 
-plt.title('ii. 3D State Error RMS vs. Process Noise Sigma')
-fig.tight_layout()  # otherwise the right y-label is slightly clipped
-plt.savefig(os.path.join(output_dir, 'LKF_SNC_sweep_state_errors_RIC.png'))
-# plt.show()
+if ric_val < eci_val:
+    print(f"--> RIC frame noise yielded lower Position Error.")
+else:
+    print(f"--> ECI frame noise yielded lower Position Error.")

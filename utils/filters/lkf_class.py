@@ -8,8 +8,8 @@ from utils.ground_station_utils.gs_latlon import get_gs_eci_state
 from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 from resources.gs_locations_latlon import stations_ll
 from utils.misc.print_progress import print_progress
-from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6
-from utils.frame_conversions.rel_to_inertial_functions import compute_Q_ECI_from_RIC
+from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6, zonal_sph_ode_dmc
+from utils.process_noise.compute_q_discrete import compute_q_discrete
 
 @dataclass
 class LKFResults:
@@ -36,138 +36,140 @@ class LKF:
         self.n = n_states
         self.I = np.eye(n_states)
 
-    def run(self, obs, X_0, x_0, P0, Rk, Q, options) -> LKFResults:
-
-        # Print filter start message
-        print("Initializing LKF...")
+    def run(self, obs, X_0, x_0, P0, Rk, options) -> LKFResults:
+        print(f"Initializing Fast LKF (One-Shot Integration) with n={self.n}...")
         
-        # Initialize filter arguments
+        # 1. Setup
         coeffs = options['coeffs']
         abs_tol = options['abs_tol']
         rel_tol = options['rel_tol']
-        SNC_frame = options.get('SNC_frame', 'ECI')
+        
+        if options.get('method') == 'DMC':
+            ode_func = zonal_sph_ode_dmc
+        else:
+            ode_func = zonal_sph_ode_6x6
 
-        # Time vector from measurements
-        time_eval = obs['Time(s)'].values
-
-        # Solve initial reference trajectory
-        sol_ref = solve_ivp(
-                zonal_sph_ode_6x6, 
-                (0, time_eval[-1]), 
-                X_0, 
-                t_eval=time_eval, 
-                args=(coeffs,),
-                rtol=abs_tol, 
-                atol=rel_tol
-        )
-
-        # Initialization
-        x = x_0.copy()
+        # Initialize State Variables
+        X_ref_init = X_0[0:self.n]
+        x_dev = x_0.copy()
         P = P0.copy()
-        Phi_prev = np.eye(self.n)
-
-        # Temporary lists for collection
+        
+        # Extract all time points
+        times = obs['Time(s)'].values
+        t_start = times[0]
+        t_end = times[-1]
+        
+        # 2. ONE-SHOT INTEGRATION
+        # ------------------------------------------------------------------
+        # We integrate the Reference State and the Cumulative STM (Phi) 
+        # from start to finish in one call.
+        
+        print(f"   Propagating reference trajectory for {len(times)} steps...")
+        
+        # Initial State: [Reference, Identity_STM]
+        state_integ_0 = np.concatenate([X_ref_init, np.eye(self.n).flatten()])
+        
+        sol = solve_ivp(
+            ode_func, 
+            (t_start, t_end), 
+            state_integ_0, 
+            t_eval=times,  # Force output exactly at measurement times
+            args=(coeffs,), 
+            rtol=abs_tol, 
+            atol=rel_tol
+        )
+        
+        # Unpack results: Shape is (n_states, n_times)
+        X_ref_all = sol.y[0:self.n, :]
+        Phi_all_flat = sol.y[self.n:, :]
+        
+        # 3. FILTER LOOP
+        # ------------------------------------------------------------------
         _x, _P, _state, _prefit_res, _postfit_res, _nis = [], [], [], [], [], []
+        
+        # The integration includes the start time at index 0.
+        # We iterate starting from k=1 (the second point).
+        
+        for k in range(1, len(times)):
+            # Print progress less frequently to save I/O time
+            if k % 100 == 0: print_progress(k, len(times))
 
-        for k in range(1, len(sol_ref.t)):
-            # Print progress
-            print_progress(k, len(sol_ref.t))
-
-            # Compute time step
-            t_curr = time_eval[k]
-            t_prev = time_eval[k-1]
+            t_curr = times[k]
+            t_prev = times[k-1]
             dt = t_curr - t_prev
-
-            # SNC process noise
-            Q_step_PSD = Q.copy() # Default if no frame transformation needed
-            # If SNC is defined in RIC, rotate Q into ECI frame
-            if SNC_frame == 'RIC':
-                # Use current reference state to define the frame
-                r_vec = sol_ref.y[0:3, k]
-                v_vec = sol_ref.y[3:6, k]
-                
-                # --- Compute Rotation Matrix (RIC -> ECI) ---
-                # Radial: Unit vector in direction of position
-                u_r = r_vec / np.linalg.norm(r_vec)
-                
-                # Cross-track: Unit vector normal to orbital plane
-                h_vec = np.cross(r_vec, v_vec)
-                u_c = h_vec / np.linalg.norm(h_vec)
-                
-                # In-track: Completes the triad
-                u_i = np.cross(u_c, u_r)
-                
-                # Rotation Matrix R = [u_r, u_i, u_c]
-                R_RIC2ECI = np.column_stack((u_r, u_i, u_c))
-                
-                # Rotate the RIC diagonal covariance into ECI
-                # Q_ECI = R * Q_RIC * R.T
-                Q_step_PSD = R_RIC2ECI @ Q @ R_RIC2ECI.T
-
-            # Calculate Discrete Process Noise Matrix (Q_k)
-            # using the PSD for this specific step
-            Q_rr = (dt**3 / 3) * Q_step_PSD
-            Q_rv = (dt**2 / 2) * Q_step_PSD
-            Q_vv = dt * Q_step_PSD
-            
-            Q_k  = np.block([
-                [Q_rr, Q_rv],
-                [Q_rv.T, Q_vv]
-            ])
-            
-            # Dynamics & Prediction
-            Phi_global = sol_ref.y[6:, k].reshape(self.n, self.n)
-            Phi_incr = Phi_global @ np.linalg.inv(Phi_prev)
-            
-            # Prediction Step
-            x_pred = Phi_incr @ x
-            P_pred = Phi_incr @ P @ Phi_incr.T + Q_k
-            
-            # Ground Station & Measurement
             meas_row = obs.iloc[k]
+
+            # --- A. Extract Pre-Computed State & STM ---
+            X_ref_curr = X_ref_all[:, k]
+            
+            # Get Cumulative STMs: Phi(t_k, t0) and Phi(t_{k-1}, t0)
+            Phi_cum_curr = Phi_all_flat[:, k].reshape(self.n, self.n)
+            Phi_cum_prev = Phi_all_flat[:, k-1].reshape(self.n, self.n)
+            
+            # Compute Step STM: Phi(t_k, t_{k-1}) = Phi(t_k, t0) @ inv(Phi(t_{k-1}, t0))
+            # This is the "transition from previous step to now"
+            Phi_step = Phi_cum_curr @ np.linalg.inv(Phi_cum_prev)
+
+            # --- B. Time Update (Prediction) ---
+            # Propagate deviation: x_dev_k = Phi_step * x_dev_{k-1}
+            x_dev_pred = Phi_step @ x_dev
+            
+            # Process Noise
+            Q_k = compute_q_discrete(dt, X_ref_curr, options)
+            
+            # Propagate Covariance
+            P_pred = Phi_step @ P @ Phi_step.T + Q_k
+
+            # --- C. Measurement Update ---
             station_idx = int(meas_row['Station_ID']) - 1
             Rs, Vs = get_gs_eci_state(
                 stations_ll[station_idx][0], 
                 stations_ll[station_idx][1], 
-                sol_ref.t[k], 
-                init_theta=np.deg2rad(122)
+                t_curr
             )
             
-            x_ref = sol_ref.y[0:6, k]
-            y_pred_ref = compute_rho_rhodot(x_ref, np.concatenate([Rs, Vs]))
+            # Measurement Models
+            y_pred_ref = compute_rho_rhodot(X_ref_curr[0:6], np.concatenate([Rs, Vs]))
             y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
-
-            # Filter Update
-            prefit_res = y_obs - (y_pred_ref)
-
+            
             # Prefit Residual
-            H = compute_H_matrix(x_ref[0:3], x_ref[3:6], Rs, Vs)
-            innovation = prefit_res - H @ x_pred
-
+            prefit_res = y_obs - y_pred_ref
+            
+            # H Matrix
+            H_6 = compute_H_matrix(X_ref_curr[0:3], X_ref_curr[3:6], Rs, Vs)
+            if self.n > 6:
+                H = np.hstack([H_6, np.zeros((2, self.n - 6))])
+            else:
+                H = H_6
+                
+            # Kalman Gain
+            innovation = prefit_res - H @ x_dev_pred
             S = H @ P_pred @ H.T + Rk
             K = P_pred @ H.T @ np.linalg.inv(S)
-
-            # NIS Calculation
-            nis = innovation.T @ np.linalg.solve(S,innovation)
             
-            x = x_pred + K @ innovation
-
-            # Joseph Form Covariance Update
+            # State Update
+            x_dev = x_dev_pred + K @ innovation
+            
+            # Covariance Update (Joseph Form)
             IKH = self.I - K @ H
             P = IKH @ P_pred @ IKH.T + K @ Rk @ K.T
-
-            # Postfit Residual
-            postfit_res = prefit_res - H @ x
             
-            # --- 4. Append Copies to Lists ---
-            _x.append(x.copy())
+            # --- D. Storage ---
+            nis = innovation.T @ np.linalg.solve(S, innovation)
+            postfit_res = prefit_res - H @ x_dev
+            X_total_est = X_ref_curr + x_dev
+
+            _x.append(x_dev.copy())
             _P.append(P.copy())
-            _state.append((x_ref + x).copy())
+            _state.append(X_total_est.copy())
             _prefit_res.append(prefit_res.copy())
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis.copy())
-            
-            Phi_prev = Phi_global.copy()
 
-        # Hand off lists to the Dataclass, which converts them to arrays
+        # Final cumulative STM is simply the last extracted cumulative STM
+        Phi_final = Phi_all_flat[:, -1].reshape(self.n, self.n)
+
         return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis)
+    
+
+    

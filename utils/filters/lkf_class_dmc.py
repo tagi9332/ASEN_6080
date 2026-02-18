@@ -18,6 +18,7 @@ class LKFResults:
     innovations: Any
     postfit_residuals: Any
     nis_hist: Any
+    accel_hist: Any 
 
     def __post_init__(self):
         self.dx_hist = np.array(self.dx_hist)
@@ -26,6 +27,9 @@ class LKFResults:
         self.innovations = np.array(self.innovations)
         self.postfit_residuals = np.array(self.postfit_residuals)
         self.nis_hist = np.array(self.nis_hist)
+
+        if self.accel_hist is not None:
+            self.accel_hist = np.array(self.accel_hist)
 
 # --- HELPER FUNCTIONS ---
 
@@ -103,7 +107,7 @@ class LKF_DMC:
         x = x_0.copy()
         P = P0.copy()
         
-        _x, _P, _state, _prefit_res, _postfit_res, _nis = [], [], [], [], [], []
+        _x, _P, _state, _prefit_res, _postfit_res, _nis, _w_terms = [], [], [], [], [], [], []
 
         # Iterate through measurement times
         for k in range(1, len(time_eval)):
@@ -176,6 +180,10 @@ class LKF_DMC:
             postfit_res = prefit_res - H @ x
             nis = innovation.T @ np.linalg.solve(S, innovation)
 
+            # Store w terms
+            w_current = x[6:9].copy()  # Extract current w estimate
+            _w_terms.append(w_current)
+
             _x.append(x.copy())
             _P.append(P.copy())
             _state.append((ref_state_k + x).copy())
@@ -183,4 +191,4 @@ class LKF_DMC:
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis.copy())
 
-        return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis)
+        return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis, accel_hist=_w_terms)

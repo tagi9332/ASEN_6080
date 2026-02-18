@@ -28,15 +28,13 @@ x_0 = np.array([0.1, -0.03, 0.25, 0.3e-3, -0.5e-3, 0.2e-3])
 
 # Initial Covariance (P0)
 P0 = np.diag([1, 1, 1, 1e-3, 1e-3, 1e-3])**2
-# P0 = np.diag([1e3, 1e3, 1e3, 1, 1, 1])**2
-
 
 # Measurement Noise (Rk): [Range (km^2), Range-Rate (km/s)^2]
-Rk = np.diag([1e-3, 1e-6])
+Rk = np.diag([1e-6, 1e-12])
 
 # Process noise (SNC implementation)
-sigma_a = 1e-8 / 1000 # convert to km/s^2 for consistency with state units
-Q = sigma_a**2 * np.eye(3)
+sigma_a = 1e-8 # convert to km/s^2 for consistency with state units
+Q_psd = sigma_a**2 * np.eye(3)
 
 
 # 2. Setup Reference Trajectory (The "Truth" or Linearization Point)
@@ -54,25 +52,32 @@ time_eval = obs['Time(s)'].values
 
 # Filter arguments
 coeffs = np.array([MU_EARTH, J2, 0])
+
+# We pack all Process Noise settings here for compute_q_discrete
 options = {
     'coeffs': coeffs,
     'abs_tol': 1e-10,
     'rel_tol': 1e-10,
-    'bootstrap_steps': 50,  # Number of initial steps to run in LKF mode
-    'SNC_frame': 'RIC' # ECI or RIC frame for SNC implementation
+    'bootstrap_steps': 500,  # Number of initial steps to run in LKF mode
+    
+    # Process Noise Settings
+    'method': 'SNC',          # Use State Noise Compensation
+    'frame_type': 'RIC',      # Frame to apply noise (ECI or RIC)
+    'Q_cont': Q_psd,          # Continuous PSD matrix
+    'threshold': 10.0,       # Max dt threshold
+    'B': None                 # Not used for SNC
 }
 
 # Run the Filter
 ekf_filter = EKF(n_states=6)
 
-# Key Fix: Using keyword arguments to avoid order mismatch
+# Key Fix: Q is now inside 'options', removed from function arguments
 results = ekf_filter.run(
     obs=obs,
     X_0=X_0,
     x_0=x_0,
     P0=P0,
     Rk=Rk,
-    Q=Q,
     options=options
 )
 
@@ -81,7 +86,7 @@ results = ekf_filter.run(
 post_options = {
     'truth_traj_file': r'data\problem_2a_traj.csv',
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 50,
+    'data_mask_idx': 500,
     'plot_state_errors': True,
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,

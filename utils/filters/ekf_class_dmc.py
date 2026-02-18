@@ -121,18 +121,13 @@ class EKF:
         abs_tol = options['abs_tol']
         rel_tol = options['rel_tol']
         dt_max = options.get('dt_max', 60.0) 
-        
-        # --- BOOTSTRAP CONFIGURATION ---
-        # Default to 0 if not provided (Standard EKF)
         bootstrap_steps = options.get('bootstrap_steps', 0)
         
         mu, _, _, B_mat = coeffs
 
         # 1. Setup State Vector
         X_curr = X_0.copy()
-        if len(X_curr) == 6:
-            X_curr = np.concatenate([X_curr, np.zeros(3)])
-
+        
         # 2. Setup Deviation Vector
         x_dev = np.zeros(self.n)
         if len(x_0) == self.n:
@@ -141,11 +136,13 @@ class EKF:
         # 3. Setup Covariance
         P = P0.copy()
 
+        # DMC Noise Mapping Matrix (process noise affects acceleration)
         B_noise = np.zeros((9, 3))
         B_noise[6:9, :] = np.eye(3)
 
+        # Storage
         _P, _state, _x = [], [], []
-        _accel = [] 
+        _w_terms = [] # <--- NEW: Explicitly storing the 'w' (accel) terms
         _prefit_res, _postfit_res = [], []
         _nis_hist = []
         
@@ -187,7 +184,7 @@ class EKF:
                 A_mat[0:3, 3:6] = np.eye(3)
                 A_mat[3:6, 6:9] = np.eye(3)
                 A_mat[3:6, 0:3] = G_grav
-                A_mat[6:9, 6:9] = -B_mat
+                A_mat[6:9, 6:9] = -B_mat # DMC decay
                 
                 Phi_step, Q_step = compute_van_loan(A_mat, B_noise, Q_PSD, h)
                 
@@ -227,10 +224,8 @@ class EKF:
             postfit_res = prefit_res_ref - H @ x_dev
 
             # -------------------------------------------------------
-            # 3. RECTIFICATION (Bootstrap Logic)
+            # 3. RECTIFICATION
             # -------------------------------------------------------
-            # If we are past the bootstrap phase, we rectify (move dev to ref).
-            # If k < bootstrap_steps, we skip this block, behaving like an LKF.
             if k >= bootstrap_steps:
                 X_curr[0:9] = X_curr[0:9] + x_dev
                 x_dev = np.zeros(self.n)
@@ -239,17 +234,16 @@ class EKF:
             # 4. LOGGING
             # -------------------------------------------------------
             X_total = X_curr.copy()
-            if len(X_total) > 9: X_total = X_total[0:9]
-            
-            # Total State = Ref + Deviation
-            X_total = X_total + x_dev
+            # If not rectifying, we must add dev to ref to get total estimate
+            if k < bootstrap_steps:
+                X_total = X_total + x_dev
             
             _x.append(x_dev.copy())
-            
-            # SAVE ONLY 6 STATES TO MATCH TRUTH
             _state.append(X_total[0:6].copy())
-            # SAVE ACCEL SEPARATELY
-            _accel.append(X_total[6:9].copy())
+            
+            # CAPTURE THE W TERMS (Last 3 states)
+            w_current = X_total[6:9].copy()
+            _w_terms.append(w_current)
             
             _P.append(P.copy())
             _prefit_res.append(prefit_res_ref.copy())
@@ -258,4 +252,4 @@ class EKF:
             
             t_prev = t_curr
 
-        return FilterResults(_x, _P, _state, _prefit_res, _postfit_res, _nis_hist, accel_hist=_accel)
+        return FilterResults(_x, _P, _state, _prefit_res, _postfit_res, _nis_hist, accel_hist=_w_terms)

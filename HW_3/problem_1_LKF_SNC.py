@@ -35,22 +35,29 @@ time_eval = obs['Time(s)'].values
 # ODE arguments
 coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
 
+# Process noise settings (SNC implementation)
+sigma_a = 1e-8 # km/s^2
+Q_psd = sigma_a**2 * np.eye(3)
+
 # Set LKF options
+# We now pack all Process Noise settings here for calculate_q_discrete
 options = {
     'coeffs': coeffs,
     'abs_tol': 1e-10,
     'rel_tol': 1e-10,
-    'SNC_frame': 'RIC' # ECI or RIC frame for SNC implementation
-
+    
+    # --- New Process Noise Settings ---
+    'method': 'SNC',          # Chosen method (SNC or DMC)
+    'frame_type': 'RIC',      # Frame to apply noise in (RIC or ECI)
+    'Q_cont': Q_psd,          # Continuous PSD matrix
+    'threshold': 10.0,       # Max dt to prevent instability (example value)
+    'B': None                 # Not needed for SNC
 }
-
-# Process noise (SNC implementation)
-sigma_a = 1e-6 / 1000 # km/s^2
-Q = sigma_a**2 * np.eye(3)
 
 lkf_filter = LKF(n_states=6)
 
-results = lkf_filter.run(obs, X_0, x_0, P0, Rk, Q, options)
+# Run LKF (Removed explicit Q argument, passing options containing Q_cont)
+results = lkf_filter.run(obs, X_0, x_0, P0, Rk, options)
 
 # Run post-processing
 post_options = {
@@ -66,7 +73,6 @@ post_options = {
     'plot_filter_consistency': True,
     'plot_covariance_ellipsoid': True,
     'plot_nis_metric': True
-
 }
 
-post_process(results,obs,post_options)
+post_process(results, obs, post_options)

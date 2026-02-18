@@ -144,13 +144,7 @@ for i, sigma in enumerate(sigmas_to_test):
     lkf = LKF_DMC(n_states=9)
     results = lkf.run(obs, X_0_ref, x_hat_0, P0, Rk, Q_PSD, lkf_options)
 
-    # --- METRICS ---
-    
-    # IMPORTANT: 
-    # The LKF loop typically runs from k=1 to N (skipping the initial epoch t0).
-    # Therefore, results.state_hist has length (N_measurements - 1).
-    # We must slice our raw truth array to match (skipping the first entry).
-    
+    # --- METRICS ---    
     truth_states_k = truth_states_all[1:, :] 
     
     # Check shape alignment
@@ -184,10 +178,10 @@ plt.loglog(sigmas_to_test *1e3, rms_pos_history, 'b-o', label='Pos RMS (km)')
 plt.loglog(sigmas_to_test *1e3, rms_vel_history, 'r-s', label='Vel RMS (km/s)')
 plt.xlabel(r'Steady State Acceleration $\sigma$ [$m/s^2$]')
 plt.ylabel('State RMS Error')
-plt.title(f'DMC State Accuracy Sweep (Tau={tau:.1f}s)')
+plt.title(f'LKF DMC State Accuracy Sweep (Tau={tau:.1f}s)')
 plt.grid(True, which="both", ls="-", alpha=0.5)
 plt.legend()
-plt.savefig(os.path.join(output_dir, 'DMC_sweep_state_errors.png'))
+plt.savefig(os.path.join(output_dir, 'LKF_DMC_sweep_state_errors.png'))
 plt.show()
 
 # Plot 2: Measurement Residual RMS
@@ -196,8 +190,8 @@ plt.loglog(sigmas_to_test *1e3, rms_res_range_history, 'b-o', label='Range RMS (
 plt.loglog(sigmas_to_test *1e3, rms_res_rr_history, 'r-s', label='Range-Rate RMS (km/s)')
 plt.xlabel(r'Steady State Acceleration $\sigma$ [$m/s^2$]')
 plt.ylabel('Post-fit Residual RMS')
-plt.title(f'DMC Measurement Residual Sweep (Tau={tau:.1f}s)')
+plt.title(f'LKF DMC Measurement Residual Sweep (Tau={tau:.1f}s)')
 plt.grid(True, which="both", ls="-", alpha=0.5)
 plt.legend()
-plt.savefig(os.path.join(output_dir, 'DMC_sweep_residuals.png'))
+plt.savefig(os.path.join(output_dir, 'LKF_DMC_sweep_residuals.png'))
 plt.show()
