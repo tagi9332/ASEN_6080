@@ -19,6 +19,10 @@ class LKFResults:
     innovations: Any
     postfit_residuals: Any
     nis_hist: Any
+    P_pred_hist: Any = None  # Optional: Store predicted covariance before update
+    Phi_step_hist: Any = None  # Optional: Store step STMs for analysis
+    X_ref_hist: Any = None  # Optional: Store reference trajectory history
+    times: Any = None  # Optional: Store time history for alignment with measurements
 
     def __post_init__(self):
         self.dx_hist = np.array(self.dx_hist)
@@ -27,6 +31,10 @@ class LKFResults:
         self.innovations = np.array(self.innovations)
         self.postfit_residuals = np.array(self.postfit_residuals)
         self.nis_hist = np.array(self.nis_hist)
+        self.P_pred_hist = np.array(self.P_pred_hist) if self.P_pred_hist is not None else None
+        self.Phi_step_hist = np.array(self.Phi_step_hist) if self.Phi_step_hist is not None else None
+        self.X_ref_hist = np.array(self.X_ref_hist) if self.X_ref_hist is not None else None
+        self.times = np.array(self.times) if self.times is not None else None
 
 # ============================================================
 # Linearized Kalman Filter
@@ -86,6 +94,7 @@ class LKF:
         # 3. FILTER LOOP
         # ------------------------------------------------------------------
         _x, _P, _state, _prefit_res, _postfit_res, _nis = [], [], [], [], [], []
+        _Phi_step,  _P_pred, _X_ref = [], [], []
         
         # The integration includes the start time at index 0.
         # We iterate starting from k=1 (the second point).
@@ -165,11 +174,14 @@ class LKF:
             _prefit_res.append(prefit_res.copy())
             _postfit_res.append(postfit_res.copy())
             _nis.append(nis.copy())
+            _Phi_step.append(Phi_step.copy())
+            _P_pred.append(P_pred.copy())
+            _X_ref.append(X_ref_curr.copy())
 
         # Final cumulative STM is simply the last extracted cumulative STM
         Phi_final = Phi_all_flat[:, -1].reshape(self.n, self.n)
 
-        return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis)
+        return LKFResults(_x, _P, _state, _prefit_res, _postfit_res, _nis, _Phi_step, _P_pred, _X_ref)
     
 
     
