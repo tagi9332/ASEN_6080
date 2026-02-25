@@ -36,7 +36,7 @@ time_eval = obs['Time(s)'].values
 coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
 
 # Process noise settings (SNC implementation)
-sigma_a = 1e-8 # km/s^2
+sigma_a = 1e-1 # km/s^2
 Q_psd = sigma_a**2 * np.eye(3)
 
 # Set LKF options

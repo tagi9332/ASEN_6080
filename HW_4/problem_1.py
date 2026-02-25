@@ -13,11 +13,7 @@ from utils.orbital_element_conversions.oe_conversions import orbital_elements_to
 from resources.constants import MU_EARTH, J2, J3, R_EARTH
 from utils.filters.lkf_class import LKF
 from utils.plotting.post_process import post_process
-
-# --- ADDED: Import Smoother ---
-# Note: Adjust 'utils.filters.rts_smoother' to wherever you saved the smoother code
-from utils.filters.rts_smoother import RTSSmoother
-from utils.filters.run_smoother import run_smoother 
+from utils.filters.rts_smoother import RTSSmoother  # <-- Updated Import
 
 # ============================================================
 # Main Execution
@@ -42,14 +38,16 @@ time_eval = obs['Time(s)'].values
 coeffs = [MU_EARTH, J2, 0] # Ignoring J3 for dynamics
 
 # Process noise settings (SNC implementation)
-sigma_a = 1e-8 # km/s^2
+sigma_a = 1e-6 # km/s^2
 Q_psd = sigma_a**2 * np.eye(3)
+# Q_psd = np.zeros((3, 3)) # Set to zero for no process noise case
 
 # Set LKF options
 options = {
     'coeffs': coeffs,
     'abs_tol': 1e-10,
     'rel_tol': 1e-10,
+    'potter_form': True,  # Use Potter formulation for stability
     
     # --- Process Noise Settings ---
     'method': 'SNC',          # Chosen method (SNC or DMC)
@@ -87,16 +85,35 @@ truth_interp_func = interp1d(
 )
 X_truth_interp = truth_interp_func(time_eval)
 
-# Trim the truth data to match the LKF output times (in case of extrapolation issues)
-time_eval_trimmed = time_eval[1:]
-X_truth_interp_trimmed = X_truth_interp[1:]
+# Check for process noise in LKF run
+has_q = np.any(Q_psd > 0)
 
-# Run the wrapper script (no plot argument anymore)
-smooth_out_lkf_format, state_error_smooth, rms_comp, rms_full = run_smoother(
-    results, 
-    X_truth_interp_trimmed
-)
+# Instantiate and run the new RTSSmoother class
+smoother = RTSSmoother(n_states=6, has_process_noise=has_q)
+smooth_res = smoother.run(results)
 
+# Calculate State Errors
+state_error_smooth = smooth_res.state_smooth[:, 0:6] - X_truth_interp[:, 0:6]
+
+# Calculate RMS (Root Mean Square) Error
+rms_comp = np.sqrt(np.mean(state_error_smooth**2, axis=0))
+rms_full = np.sqrt(np.mean(np.sum(state_error_smooth**2, axis=1)))
+
+print("\nSmoother Performance:")
+print(f"  Pos RMS (X, Y, Z): {rms_comp[0:3]} km")
+print(f"  Vel RMS (Xdot, Ydot, Zdot): {rms_comp[3:6]} km/s")
+print(f"  Full State 3D RMS: {rms_full:.6f}")
+
+# ============================================================
+# Overwrite LKF Results with Smoother Output
+# ============================================================
+print("\n--- Merging Smoothed States into Forward Filter Results ---")
+
+# Overwrite the state and covariance histories with the smoothed versions.
+# All other metrics (innovations, postfit_residuals, nis_hist) are left untouched!
+results.dx_hist = smooth_res.dx_smooth
+results.P_hist = smooth_res.P_smooth
+results.state_hist = smooth_res.state_smooth
 # ============================================================
 # Post-Processing
 # ============================================================
@@ -115,18 +132,6 @@ post_options = {
     'plot_nis_metric': True
 }
 
-# 1. Post-Process LKF
-print("\n--- Plotting LKF Results ---")
+# 1. Post-Process Combined Results
+print("\n--- Plotting Smoothed Trajectory & Forward Residuals ---")
 post_process(results, obs, post_options)
-
-# 2. Post-Process Smoother
-print("\n--- Plotting Smoother Results ---")
-smooth_post_options = post_options.copy()
-
-# Turn off residual/NIS plots since the smoother doesn't compute new measurements
-smooth_post_options['plot_postfit_residuals'] = False
-smooth_post_options['plot_prefit_residuals'] = False
-smooth_post_options['plot_residual_comparison'] = False
-smooth_post_options['plot_nis_metric'] = False
-
-post_process(smooth_out_lkf_format, obs, smooth_post_options)

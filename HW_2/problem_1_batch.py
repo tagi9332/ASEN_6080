@@ -35,7 +35,7 @@ stations_ll = np.deg2rad([
 ])
 
 # Load Measurements
-df_meas = pd.read_csv(fr'data\measurements_noisy.csv')
+df_meas = pd.read_csv(fr'data\measurements_2a_noisy.csv')
 
 # Initial Covariances & Weights
 # P0: Confidence in your initial r0, v0 guess
@@ -70,7 +70,7 @@ results = batch_filter.run(
 
 # Run post-processing
 post_options = {
-    'truth_traj_file': r'data\HW1_truth.csv',
+    'truth_traj_file': r'data\problem_2a_traj.csv',
     'save_to_timestamped_folder': True,
     'data_mask_idx': 300,
     'plot_state_errors': True,

@@ -1,32 +1,23 @@
-
-import os
-import sys
-import copy
 import numpy as np
-import matplotlib.pyplot as plt
-
-# Adjust path to find local modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from utils.filters.lkf_class import LKFResults
-from utils.filters.rts_smoother import RTSSmoother, SmootherResults
+import copy
+from utils.filters.rts_smoother import RTSSmoother
 
 class SmootherLKFEquivalent:
     pass
 
-def run_smoother(lkf_out, X_truth_interp):
+def run_smoother(lkf_out, X_truth_interp, process_noise: bool = True):
     """
     Runs the RTS smoother, calculates RMS metrics, and formats the 
     output to perfectly match the LKFResults structure for post-processing.
     """
-    # 1. Run the smoother
-    smoother = RTSSmoother(n_states=lkf_out.dx_hist.shape[1])
+    # Run the smoother, passing the process noise flag
+    smoother = RTSSmoother(n_states=lkf_out.dx_hist.shape[1], has_process_noise=process_noise)
     smooth_out = smoother.run(lkf_out)
     
-    # 2. Calculate State Errors
+    # Calculate State Errors
     state_error_smooth = smooth_out.state_smooth[:, 0:6] - X_truth_interp[:, 0:6]
     
-    # 3. Calculate RMS (Root Mean Square) Error
+    # Calculate RMS (Root Mean Square) Error
     rms_comp = np.sqrt(np.mean(state_error_smooth**2, axis=0))
     rms_full = np.sqrt(np.mean(np.sum(state_error_smooth**2, axis=1)))
     
@@ -35,7 +26,7 @@ def run_smoother(lkf_out, X_truth_interp):
     print(f"  Vel RMS (Xdot, Ydot, Zdot): {rms_comp[3:6]} km/s")
     print(f"  Full State 3D RMS: {rms_full:.6f}")
     
-    # 4. Package into LKF-compatible format using a shallow copy
+    # Package into LKF-compatible format using a shallow copy
     smooth_lkf_match = copy.copy(lkf_out)
     
     # Overwrite the forward filter states with the smoothed states
