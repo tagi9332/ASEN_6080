@@ -5,13 +5,27 @@ def package_results(results, obs, options={}):
     Packages results and ensures all arrays are the exact same length.
     Solves the "Obs: 6126, States: 6125" mismatch globally.
     """
-    # 1. Extract Raw Filter Data
-    x_hist = np.array(results.dx_hist)
-    state_hist = np.array(results.state_hist)
-    P_hist = np.array(results.P_hist)
-    prefit_residuals = np.array(results.innovations)
-    postfit_residuals = np.array(results.postfit_residuals)
-    nis_hist = np.array(results.nis_hist)
+    # 1. Extract Raw Filter Data Dynamically
+    if hasattr(results, 'xEst'):
+        # --- SRIF Outputs ---
+        x_hist = np.array(results.xEst)
+        state_hist = np.array(results.XEst)
+        P_hist = np.array(results.PEst)
+        prefit_residuals = np.array(results.prefit_res)
+        postfit_residuals = np.array(results.postfit_res)
+        
+        # In an SRIF, the sum of the squares of the whitened pre-fit residuals 
+        # mathematically equates to the Normalized Innovation Squared (NIS)!
+        nis_hist = np.array([np.sum(y**2) for y in results.prefit_res_whitened])
+        
+    else:
+        # --- LKF Outputs ---
+        x_hist = np.array(results.dx_hist)
+        state_hist = np.array(results.state_hist)
+        P_hist = np.array(results.P_hist)
+        prefit_residuals = np.array(results.innovations)
+        postfit_residuals = np.array(results.postfit_residuals)
+        nis_hist = np.array(results.nis_hist)
     
     # 2. Extract Raw Times
     times = obs['Time(s)'].values
