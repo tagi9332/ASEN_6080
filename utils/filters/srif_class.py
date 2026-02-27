@@ -2,13 +2,12 @@ import numpy as np
 import scipy.linalg as la
 from scipy.integrate import solve_ivp
 from dataclasses import dataclass
-from typing import Any, List, Dict
+from typing import Any
 
-# Local Imports (Adjusted to your environment)
+# Local Imports
 from utils.ground_station_utils.gs_latlon import get_gs_eci_state
 from utils.ground_station_utils.gs_meas_model_H import compute_H_matrix, compute_rho_rhodot
 from resources.gs_locations_latlon import stations_ll
-from utils.misc.print_progress import print_progress
 from utils.zonal_harmonics.zonal_harmonics import zonal_sph_ode_6x6, zonal_sph_ode_dmc
 
 
@@ -51,18 +50,18 @@ class SRIFResults:
     dx_hist: Any
     P_hist: Any
     state_hist: Any
-    innovations: Any             # Was prefit_res
-    postfit_residuals: Any       # Was postfit_res
-    P_pred_hist: Any             # Was PBarEst
-    Phi_step_hist: Any           # Was Phi
-    X_ref_hist: Any              # Was XStar
+    innovations: Any
+    postfit_residuals: Any
+    P_pred_hist: Any
+    Phi_step_hist: Any
+    X_ref_hist: Any
     nis_hist: Any          
     times: Any
     
     # SRIF-specific variables
     prefit_res_whitened: Any
     postfit_res_whitened: Any
-    Phi_total_hist: Any          # Was Phi_total
+    Phi_total_hist: Any
     
     # Process Noise / Smoother specific variables
     Ru: Any
@@ -114,14 +113,7 @@ class SRIF:
 
     @staticmethod
     def _qr_transform(mat: np.ndarray) -> np.ndarray:
-        transformed_matrix = householder(mat)
-        min_dim = min(transformed_matrix.shape) - 1
-        signs = np.sign(np.diag(transformed_matrix))
-        signs[signs == 0] = 1
-        
-        for i in range(min_dim):
-            transformed_matrix[i, :] *= signs[i]
-        return transformed_matrix
+        return householder(mat)
 
     def run(self, obs, X_0, x_0, P0, Q0, uBar, R_meas, options, force_upper_triangular=True) -> SRIFResults:
         print(f"Running Standardized SRIF with n={self.n} states...")
@@ -137,7 +129,7 @@ class SRIF:
         has_process_noise = np.any(Q0 > 0)
 
         # ---------------------------------------------------------
-        # Initialization & t0 Padding (Matching LKF)
+        # Initialization & t0 Padding
         # ---------------------------------------------------------
         X_ref_prev = X_0.copy()
         x_dev_prev = x_0.copy()
@@ -155,7 +147,6 @@ class SRIF:
         _nis_hist = [0.0]
         _X_ref_hist = [X_ref_prev.copy()]
 
-        # Smoother Variables (Padding t0 with zeros for alignment)
         _Ru = [np.zeros((q, q))]
         _Rux = [np.zeros((q, n))]
         _bTildeu = [np.zeros(q)]
@@ -177,6 +168,17 @@ class SRIF:
         t_prev = times[0]
 
         # ---------------------------------------------------------
+        # Pre-Whiten Observations
+        # ---------------------------------------------------------
+        V_meas = np.linalg.cholesky(R_meas)
+        y_obs_whitened = []
+        for i in range(len(times)):
+            meas_row = obs.iloc[i]
+            y_raw = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
+            y_w = la.solve_triangular(V_meas, y_raw, lower=True)
+            y_obs_whitened.append(y_w)
+
+        # ---------------------------------------------------------
         # Main SRIF Loop
         # ---------------------------------------------------------
         for k in range(1, len(times)):
@@ -184,7 +186,7 @@ class SRIF:
             dt = t_curr - t_prev
             meas_row = obs.iloc[k]
 
-            # 1. Propagate Full STM
+            # Propagate Full STM
             state_integ_0 = np.concatenate([X_ref_prev, Phi_full.flatten()])
             sol_full = solve_ivp(
                 ode_func, (t_prev, t_curr), state_integ_0, 
@@ -193,7 +195,7 @@ class SRIF:
             Phi_full = sol_full.y[n:, 0].reshape(n, n)
             _Phi_total_hist.append(Phi_full.copy())
 
-            # 2. Propagate Reference Trajectory and Step STM
+            # Propagate Reference Trajectory and Step STM
             state_step_0 = np.concatenate([X_ref_prev, np.eye(n).flatten()])
             sol_step = solve_ivp(
                 ode_func, (t_prev, t_curr), state_step_0, 
@@ -203,12 +205,16 @@ class SRIF:
             Phi_step = sol_step.y[n:, 0].reshape(n, n)
             _Phi_step_hist.append(Phi_step.copy())
 
-            # 3. TIME UPDATE
+            # TIME UPDATE
             Phi_inv = np.linalg.inv(Phi_step)
             
-            if has_process_noise and dt <= 10.0: # Check your dt condition here!
+            if has_process_noise and dt <= 10.0: 
                 Gamma_i = self._gamma_func(dt)
-                Ru_k = np.linalg.cholesky(np.linalg.inv(Q0)).T
+                
+                # Process noise
+                Q_discrete = Q0 * dt
+                Ru_k = np.linalg.cholesky(np.linalg.inv(Q_discrete)).T
+                
                 Rtilde = R_im1 @ Phi_inv
                 
                 top_block = np.hstack([Ru_k, np.zeros((q, n)), bu_im1.reshape(-1, 1)])
@@ -247,26 +253,25 @@ class SRIF:
             P_pred = R_i_inv @ R_i_inv.T
             _P_pred_hist.append(P_pred)
 
-            # 4. MEASUREMENT PREPARATION & WHITENING
+            # Measurement processing
             station_idx = int(meas_row['Station_ID']) - 1
             Rs, Vs = get_gs_eci_state(
                 stations_ll[station_idx][0], stations_ll[station_idx][1], t_curr
             )
             
-            V_i = np.linalg.cholesky(R_meas)
             y_exp_raw = compute_rho_rhodot(X_ref_curr[0:6], np.concatenate([Rs, Vs]))
-            y_obs = np.array([meas_row['Range(km)'], meas_row['Range_Rate(km/s)']])
+            y_exp_w = la.solve_triangular(V_meas, y_exp_raw, lower=True)
             
-            prefit_res_raw = y_obs - y_exp_raw
-            y_i = la.solve_triangular(V_i, prefit_res_raw, lower=True)
+            y_i = y_obs_whitened[k] - y_exp_w
+            
+            prefit_res_raw = V_meas @ y_i
             
             H_raw = compute_H_matrix(X_ref_curr[0:3], X_ref_curr[3:6], Rs, Vs)
             if n > 6:
                 H_raw = np.hstack([H_raw, np.zeros((2, n - 6))])
-            Htilde_i = la.solve_triangular(V_i, H_raw, lower=True)
+            Htilde_i = la.solve_triangular(V_meas, H_raw, lower=True)
 
-            # --- ADD THIS NIS CALCULATION BLOCK ---
-            # Predict a priori state deviation: x_pred = R_i^-1 * b_i
+            # NIS computation
             x_dev_pred = la.solve_triangular(R_i, b_i, lower=False)
             innovation_pred = prefit_res_raw - (H_raw @ x_dev_pred)
             S_innov = H_raw @ P_pred @ H_raw.T + R_meas
@@ -275,7 +280,7 @@ class SRIF:
             except np.linalg.LinAlgError:
                 nis = 0.0
 
-            # 5. MEASUREMENT UPDATE
+            # Measurement update via QR
             mat = np.vstack([
                 np.hstack([R_i, b_i.reshape(-1, 1)]),
                 np.hstack([Htilde_i, y_i.reshape(-1, 1)])
@@ -288,19 +293,19 @@ class SRIF:
 
             x_dev = la.solve_triangular(R_i, b_i, lower=False)
             
-            # 6. PROCESS NOISE SMOOTHING INFO
+            # Process noise smoother (if enabled)
             if has_process_noise and dt <= 10.0:
                 u_im1 = la.solve_triangular(Ru_k_next, (bTildeu_k - Rux_k @ x_dev), lower=False)
                 _uHat.append(u_im1)
             else:
                 _uHat.append(np.zeros(q))
 
-            # 7. RECORD DATA
+            # Store results for this step
             R_inv = np.linalg.inv(R_i)
             P_curr = R_inv @ R_inv.T
             
-            innovation = V_i @ y_i
-            postfit_res = V_i @ e
+            innovation = V_meas @ y_i
+            postfit_res = V_meas @ e
 
             _P_hist.append(P_curr)
             _dx_hist.append(x_dev)
@@ -312,7 +317,7 @@ class SRIF:
             _X_ref_hist.append(X_ref_curr)
             _state_hist.append(X_ref_curr + x_dev)
 
-            # 8. UPDATE FOR NEXT STEP
+            # Update variables for next iteration
             t_prev = t_curr
             X_ref_prev = X_ref_curr
             R_im1 = R_i

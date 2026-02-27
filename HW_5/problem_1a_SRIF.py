@@ -28,7 +28,7 @@ Rk = np.diag([1e-6, 1e-12])
 r0, v0 = orbital_elements_to_inertial(10000, 0.001, 40, 80, 40, 0, units='deg')
 
 # The SRIF class handles the STM (Phi) internally now, so just pass the 6x1 state!
-X_nom = np.concatenate([r0, v0])
+X_nom = np.concatenate([r0+x_0[:3], v0+x_0[3:]])
 
 # Load Measurements
 obs = pd.read_csv(r'data\measurements_noisy.csv')
@@ -82,7 +82,7 @@ srif_results = srif_filter.run(
 post_options = {
     'truth_traj_file': r'data\HW1_truth.csv',
     'save_to_timestamped_folder': True,
-    'data_mask_idx': 300,
+    'data_mask_idx': 0,
     'plot_state_errors': True,
     'plot_state_deviation': True,
     'plot_postfit_residuals': True,
